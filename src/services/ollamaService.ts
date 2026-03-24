@@ -6,13 +6,39 @@ import {
   OllamaTagsResponse,
 } from '../types';
 
+const SAFE_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const DEFAULT_SERVER_URL = 'http://localhost:11434';
+/** Allowed characters for model names: alphanumeric, dash, dot, colon, slash */
+const MODEL_NAME_RE = /^[a-zA-Z0-9._:/-]{1,200}$/;
+
 export class OllamaService {
   private abortController: AbortController | null = null;
 
   private get baseUrl(): string {
-    return vscode.workspace
+    const raw = vscode.workspace
       .getConfiguration('ollamaChat')
-      .get<string>('serverUrl', 'http://localhost:11434');
+      .get<string>('serverUrl', DEFAULT_SERVER_URL);
+    return this.validateServerUrl(raw);
+  }
+
+  private validateServerUrl(raw: string): string {
+    try {
+      const parsed = new URL(raw);
+      if (!SAFE_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
+        vscode.window.showWarningMessage(
+          `Ollama server URL must point to localhost. Reverting to default.`
+        );
+        return DEFAULT_SERVER_URL;
+      }
+      // Only allow http/https schemes
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return DEFAULT_SERVER_URL;
+      }
+      // Return origin + path only (strip credentials/fragments)
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      return DEFAULT_SERVER_URL;
+    }
   }
 
   async isConnected(): Promise<boolean> {
@@ -28,7 +54,9 @@ export class OllamaService {
 
   async listModels(): Promise<OllamaModelInfo[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`);
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(10000),
+      });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -155,6 +183,9 @@ export class OllamaService {
       total?: number
     ) => void
   ): Promise<void> {
+    if (!MODEL_NAME_RE.test(model)) {
+      throw new Error(`Invalid model name: "${model}"`);
+    }
     const response = await fetch(`${this.baseUrl}/api/pull`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

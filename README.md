@@ -107,6 +107,51 @@ npx @vscode/vsce package
 
 Press F5 in VS Code to launch the Extension Development Host for testing.
 
+## Installing the Extension
+
+### Option A — Install the packaged `.vsix` (recommended)
+
+1. **Install prerequisites**
+
+   ```bash
+   # Install Node.js (if not already installed)
+   # https://nodejs.org
+
+   # Install vsce (the VS Code extension packager)
+   npm install -g @vscode/vsce
+   ```
+
+2. **Clone and build**
+
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/ollama-vscode-local.git
+   cd ollama-vscode-local
+   npm install
+   vsce package
+   ```
+
+   This produces a file like `ollama-chat-local-0.1.0.vsix`.
+
+3. **Install in VS Code**
+
+   ```bash
+   code --install-extension ollama-chat-local-0.1.0.vsix
+   ```
+
+   Or from within VS Code: `Cmd+Shift+P` → **Extensions: Install from VSIX…** → select the `.vsix` file.
+
+4. Reload VS Code when prompted.
+
+### Option B — Run from source (for development)
+
+1. Clone the repo and install dependencies (same as above).
+2. Open the folder in VS Code.
+3. Press **F5** — this opens an Extension Development Host with the extension already loaded.
+
+### After installing
+
+Follow the [Quick Start](#quick-start) steps above to install Ollama and pull a model, then click the Ollama Chat icon in the Activity Bar to start chatting.
+
 ## License
 
 MIT

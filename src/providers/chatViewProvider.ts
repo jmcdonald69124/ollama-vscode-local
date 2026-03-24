@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { OllamaService } from '../services/ollamaService';
 import { ContextService } from '../services/contextService';
 import { ProjectDetector } from '../services/projectDetector';
@@ -314,7 +315,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private createNewSession(): ChatSession {
     return {
-      id: Date.now().toString(36) + Math.random().toString(36).substring(2),
+      id: crypto.randomBytes(16).toString('hex'),
       messages: [],
       model: this.currentModel,
       createdAt: Date.now(),
@@ -406,11 +407,5 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 }
 
 function getNonce(): string {
-  let text = '';
-  const possible =
-    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString('hex');
 }
