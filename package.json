@@ -2,8 +2,16 @@
   "name": "ollama-chat-local",
   "displayName": "Ollama Chat - Local AI Coding Assistant",
   "description": "Chat with CodeLlama and DeepSeek-Coder models locally via Ollama. Fully offline AI coding assistant with context-aware responses.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ollama-chat",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jmcdonald69124/ollama-vscode-local.git"
+  },
+  "homepage": "https://github.com/jmcdonald69124/ollama-vscode-local",
+  "bugs": {
+    "url": "https://github.com/jmcdonald69124/ollama-vscode-local/issues"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -263,6 +271,8 @@
     "compile": "webpack",
     "watch": "webpack --watch",
     "package": "webpack --mode production --devtool hidden-source-map",
+    "package:vsix": "vsce package",
+    "release:verify": "npm run package && npm run package:vsix",
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {

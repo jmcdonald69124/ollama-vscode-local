@@ -38,23 +38,27 @@ ollama pull deepseek-coder
 
 ### 3. Install the VS Code Extension
 
-Choose one of the following:
+For most users, install the packaged extension from GitHub Releases:
 
-1. Install from a packaged `.vsix`:
+1. Open the latest release:
+
+   https://github.com/jmcdonald69124/ollama-vscode-local/releases/latest
+
+2. Download the `.vsix` file from the release assets.
+
+3. Install it in VS Code using one of these methods:
 
    ```bash
-   git clone https://github.com/jmcdonald69124/ollama-vscode-local.git
-   cd ollama-vscode-local
-   npm install
-   npx @vscode/vsce package
-   code --install-extension ollama-chat-local-0.1.0.vsix
+   code --install-extension ollama-chat-local-0.1.1.vsix
    ```
 
-2. Or run it directly from source for development:
+   Or open VS Code and run:
 
-   - Open this repo in VS Code
-   - Press `F5`
-   - A new Extension Development Host window will open with the extension loaded
+   - `Cmd+Shift+P`
+   - `Extensions: Install from VSIX...`
+   - Select the downloaded `.vsix` file
+
+If you are developing the extension instead of just using it, see [Installing the Extension](#installing-the-extension) below for the source-based workflow.
 
 ### 4. Start Chatting
 
@@ -123,14 +127,35 @@ npm run compile
 npm run watch
 
 # Package extension
-npx @vscode/vsce package
+npm run package:vsix
+
+# Build and verify a release-ready VSIX
+npm run release:verify
 ```
 
 Press F5 in VS Code to launch the Extension Development Host for testing.
 
 ## Installing the Extension
 
-### Option A — Install the packaged `.vsix` (recommended)
+### Option A — Install from GitHub Releases (recommended)
+
+1. Go to the latest release:
+
+   https://github.com/jmcdonald69124/ollama-vscode-local/releases/latest
+
+2. Download the attached `.vsix` file.
+
+3. Install it in VS Code:
+
+   ```bash
+   code --install-extension ollama-chat-local-0.1.1.vsix
+   ```
+
+   Or from within VS Code: `Cmd+Shift+P` → **Extensions: Install from VSIX...** → select the `.vsix` file.
+
+4. Reload VS Code when prompted.
+
+### Option B — Build the `.vsix` yourself
 
 1. **Install prerequisites**
 
@@ -145,25 +170,25 @@ Press F5 in VS Code to launch the Extension Development Host for testing.
 2. **Clone and build**
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/ollama-vscode-local.git
+   git clone https://github.com/jmcdonald69124/ollama-vscode-local.git
    cd ollama-vscode-local
    npm install
-   vsce package
+   npm run package:vsix
    ```
 
-   This produces a file like `ollama-chat-local-0.1.0.vsix`.
+   This produces a file like `ollama-chat-local-0.1.1.vsix`.
 
 3. **Install in VS Code**
 
    ```bash
-   code --install-extension ollama-chat-local-0.1.0.vsix
+   code --install-extension ollama-chat-local-0.1.1.vsix
    ```
 
-   Or from within VS Code: `Cmd+Shift+P` → **Extensions: Install from VSIX…** → select the `.vsix` file.
+   Or from within VS Code: `Cmd+Shift+P` → **Extensions: Install from VSIX...** → select the `.vsix` file.
 
 4. Reload VS Code when prompted.
 
-### Option B — Run from source (for development)
+### Option C — Run from source (for development)
 
 1. Clone the repo and install dependencies (same as above).
 2. Open the folder in VS Code.
