@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { OllamaService } from '../services/ollamaService';
 import { ContextService } from '../services/contextService';
+import { ProjectDetector } from '../services/projectDetector';
+import { StyleAnalyzer } from '../services/styleAnalyzer';
+import { PromptEngine } from '../services/promptEngine';
+import { RelevanceRanker } from '../services/relevanceRanker';
+import { ConversationCompactor } from '../services/conversationCompactor';
 import {
   ChatSession,
   OllamaChatMessage,
@@ -14,6 +19,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private currentSession: ChatSession;
   private currentModel: SupportedModel;
+  private readonly projectDetector: ProjectDetector;
+  private readonly styleAnalyzer: StyleAnalyzer;
+  private readonly promptEngine: PromptEngine;
+  private readonly relevanceRanker: RelevanceRanker;
+  private readonly compactor: ConversationCompactor;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -27,6 +37,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       'codellama'
     );
     this.currentSession = this.createNewSession();
+    this.projectDetector = new ProjectDetector();
+    this.styleAnalyzer = new StyleAnalyzer();
+    this.promptEngine = new PromptEngine();
+    this.relevanceRanker = new RelevanceRanker();
+    this.compactor = new ConversationCompactor(ollamaService);
   }
 
   resolveWebviewView(
@@ -110,23 +125,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this.currentSession.messages.push({ role: 'user', content: text });
 
-    const contextPrompt = await this.contextService.buildContextPrompt();
     const config = vscode.workspace.getConfiguration('ollamaChat');
-    const systemPromptBase = config.get<string>(
-      'systemPrompt',
-      'You are a helpful coding assistant. Provide clear, concise, and correct code. When showing code, always specify the language in markdown code blocks.'
+    const contextWindowSize = config.get<number>('contextWindowSize', 4096);
+
+    // 1. Auto-detect project info and coding style in parallel
+    const [projectInfo, codingStyle] = await Promise.all([
+      this.projectDetector.detect(),
+      this.styleAnalyzer.analyze(
+        this.contextService.getFiles().map(f => f.uri)
+      ),
+    ]);
+
+    // 2. Detect task type from query
+    const taskType = this.promptEngine.detectTaskType(text);
+
+    // 3. Rank and select relevant context files within token budget
+    // Reserve ~40% of context window for system prompt + context
+    const contextTokenBudget = Math.floor(contextWindowSize * 0.35);
+    const rankedContext = await this.relevanceRanker.rankAndSelect(
+      this.contextService.getFiles(),
+      text,
+      contextTokenBudget
     );
 
-    const systemContent = contextPrompt
-      ? `${systemPromptBase}\n\nHere are the relevant files from the user's workspace for context:\n${contextPrompt}`
-      : systemPromptBase;
+    // 4. Build model-specific system prompt
+    const systemPrompt = this.promptEngine.buildSystemPrompt({
+      model: this.currentModel,
+      task: taskType,
+      projectInfo: this.projectDetector.formatForPrompt(),
+      styleGuide: this.styleAnalyzer.formatForPrompt(),
+      contextFiles: rankedContext,
+      userQuery: text,
+    });
 
+    // 5. Compact conversation history to fit remaining budget
+    const compactedHistory = await this.compactor.compact(
+      this.currentSession.messages,
+      systemPrompt,
+      contextWindowSize,
+      this.currentModel
+    );
+
+    // 6. Assemble final messages
     const systemMessage: OllamaChatMessage = {
       role: 'system',
-      content: systemContent,
+      content: systemPrompt,
     };
-
-    const messagesToSend = [systemMessage, ...this.currentSession.messages];
+    const messagesToSend = [systemMessage, ...compactedHistory];
 
     try {
       let fullResponse = '';
