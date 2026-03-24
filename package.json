@@ -1,0 +1,281 @@
+{
+  "name": "ollama-chat-local",
+  "displayName": "Ollama Chat - Local AI Coding Assistant",
+  "description": "Chat with CodeLlama and DeepSeek-Coder models locally via Ollama. Fully offline AI coding assistant with context-aware responses.",
+  "version": "0.1.0",
+  "publisher": "ollama-chat",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ollama",
+    "ai",
+    "chat",
+    "codellama",
+    "deepseek",
+    "offline",
+    "local",
+    "coding assistant"
+  ],
+  "activationEvents": [
+    "onView:ollamaChat.chatView",
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ollama-chat",
+          "title": "Ollama Chat",
+          "icon": "media/icons/ollama-chat.svg"
+        }
+      ]
+    },
+    "views": {
+      "ollama-chat": [
+        {
+          "type": "webview",
+          "id": "ollamaChat.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ollamaChat.newChat",
+        "title": "New Chat",
+        "icon": "$(add)",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.clearChat",
+        "title": "Clear Chat History",
+        "icon": "$(clear-all)",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.selectModel",
+        "title": "Select Model",
+        "icon": "$(symbol-enum)",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.addContextFile",
+        "title": "Add File to Context",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.addContextFolder",
+        "title": "Add Folder to Context",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.removeContextFile",
+        "title": "Remove from Context",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.askAboutSelection",
+        "title": "Ask Ollama About Selection",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.explainCode",
+        "title": "Explain Code with Ollama",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.checkOllamaStatus",
+        "title": "Check Ollama Connection",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.pullModel",
+        "title": "Pull Model",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.openWalkthrough",
+        "title": "Setup Guide",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.showSystemInfo",
+        "title": "Show System Info & Performance",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.recommendModels",
+        "title": "Recommend Models for My System",
+        "category": "Ollama Chat"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ollamaChat.newChat",
+          "when": "view == ollamaChat.chatView",
+          "group": "navigation"
+        },
+        {
+          "command": "ollamaChat.selectModel",
+          "when": "view == ollamaChat.chatView",
+          "group": "navigation"
+        },
+        {
+          "command": "ollamaChat.clearChat",
+          "when": "view == ollamaChat.chatView",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "ollamaChat.askAboutSelection",
+          "when": "editorHasSelection",
+          "group": "ollamaChat@1"
+        },
+        {
+          "command": "ollamaChat.explainCode",
+          "when": "editorHasSelection",
+          "group": "ollamaChat@2"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "ollamaChat.addContextFile",
+          "when": "!explorerResourceIsFolder",
+          "group": "ollamaChat@1"
+        },
+        {
+          "command": "ollamaChat.addContextFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "ollamaChat@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ollama Chat",
+      "properties": {
+        "ollamaChat.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama server URL"
+        },
+        "ollamaChat.defaultModel": {
+          "type": "string",
+          "default": "codellama",
+          "enum": [
+            "codellama",
+            "deepseek-coder"
+          ],
+          "enumDescriptions": [
+            "CodeLlama - Broad language support, strong general coding, extensive documentation",
+            "DeepSeek-Coder - Top benchmark performance, excellent code generation, strong with Chinese programming contexts"
+          ],
+          "description": "Default model for chat"
+        },
+        "ollamaChat.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Temperature for generation (0 = deterministic, higher = more creative)"
+        },
+        "ollamaChat.contextWindowSize": {
+          "type": "number",
+          "default": 4096,
+          "enum": [
+            2048,
+            4096,
+            8192,
+            16384
+          ],
+          "description": "Context window size (num_ctx). Larger values use more memory."
+        },
+        "ollamaChat.maxContextFiles": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum number of context files to include in prompts"
+        },
+        "ollamaChat.systemPrompt": {
+          "type": "string",
+          "default": "You are a helpful coding assistant. Provide clear, concise, and correct code. When showing code, always specify the language in markdown code blocks.",
+          "description": "System prompt sent with every chat request"
+        },
+        "ollamaChat.autoIncludeActiveFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically include the active editor file as context"
+        }
+      }
+    },
+    "walkthroughs": [
+      {
+        "id": "ollamaChat.setup",
+        "title": "Get Started with Ollama Chat",
+        "description": "Set up your local AI coding assistant in 3 steps",
+        "steps": [
+          {
+            "id": "installOllama",
+            "title": "Install Ollama",
+            "description": "Download and install Ollama on your machine.\n\n[Download Ollama](https://ollama.ai/download)\n\nAfter installing, verify it is running:\n\n[Check Connection](command:ollamaChat.checkOllamaStatus)",
+            "media": {
+              "markdown": "media/walkthrough/install-ollama.md"
+            },
+            "completionEvents": [
+              "onCommand:ollamaChat.checkOllamaStatus"
+            ]
+          },
+          {
+            "id": "pullModels",
+            "title": "Pull AI Models",
+            "description": "Pull CodeLlama and/or DeepSeek-Coder models.\n\n**CodeLlama** - Broad language support, great documentation\n\n**DeepSeek-Coder** - Top benchmark scores, excellent code generation\n\n[Pull CodeLlama](command:ollamaChat.pullModel)\n[Pull DeepSeek-Coder](command:ollamaChat.pullModel)",
+            "media": {
+              "markdown": "media/walkthrough/pull-models.md"
+            },
+            "completionEvents": [
+              "onCommand:ollamaChat.pullModel"
+            ]
+          },
+          {
+            "id": "startChatting",
+            "title": "Start Chatting",
+            "description": "Open the chat panel and start coding with AI assistance.\n\nAdd context files from your workspace to get codebase-aware responses.\n\n[Open Chat](command:ollamaChat.chatView.focus)",
+            "media": {
+              "markdown": "media/walkthrough/configure.md"
+            },
+            "completionEvents": [
+              "onView:ollamaChat.chatView"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.0",
+    "ts-loader": "^9.5.0",
+    "copy-webpack-plugin": "^14.0.0",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "marked": "^11.0.0"
+  }
+}
