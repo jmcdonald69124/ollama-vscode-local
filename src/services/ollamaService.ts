@@ -44,25 +44,48 @@ export class OllamaService {
   async *chatStream(
     messages: OllamaChatMessage[],
     model: string,
-    options?: { temperature?: number; num_ctx?: number }
+    options?: {
+      temperature?: number;
+      num_ctx?: number;
+      num_thread?: number;
+      num_gpu?: number;
+      num_batch?: number;
+      low_vram?: boolean;
+      keep_alive?: string;
+    }
   ): AsyncGenerator<string, void, unknown> {
     this.abortController = new AbortController();
     const config = vscode.workspace.getConfiguration('ollamaChat');
 
+    const ollamaOptions: Record<string, unknown> = {
+      temperature:
+        options?.temperature ?? config.get<number>('temperature', 0.7),
+      num_ctx:
+        options?.num_ctx ?? config.get<number>('contextWindowSize', 4096),
+    };
+
+    // Performance tuning params (only set if provided)
+    if (options?.num_thread) { ollamaOptions.num_thread = options.num_thread; }
+    if (options?.num_gpu !== undefined) { ollamaOptions.num_gpu = options.num_gpu; }
+    if (options?.num_batch) { ollamaOptions.num_batch = options.num_batch; }
+    if (options?.low_vram) { ollamaOptions.low_vram = options.low_vram; }
+
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      stream: true,
+      options: ollamaOptions,
+    };
+
+    // keep_alive controls how long the model stays loaded in memory
+    if (options?.keep_alive) {
+      body.keep_alive = options.keep_alive;
+    }
+
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        options: {
-          temperature:
-            options?.temperature ?? config.get<number>('temperature', 0.7),
-          num_ctx:
-            options?.num_ctx ?? config.get<number>('contextWindowSize', 4096),
-        },
-      }),
+      body: JSON.stringify(body),
       signal: this.abortController.signal,
     });
 

@@ -104,6 +104,16 @@
         "command": "ollamaChat.openWalkthrough",
         "title": "Setup Guide",
         "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.showSystemInfo",
+        "title": "Show System Info & Performance",
+        "category": "Ollama Chat"
+      },
+      {
+        "command": "ollamaChat.recommendModels",
+        "title": "Recommend Models for My System",
+        "category": "Ollama Chat"
       }
     ],
     "menus": {

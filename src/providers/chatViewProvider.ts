@@ -6,6 +6,8 @@ import { StyleAnalyzer } from '../services/styleAnalyzer';
 import { PromptEngine } from '../services/promptEngine';
 import { RelevanceRanker } from '../services/relevanceRanker';
 import { ConversationCompactor } from '../services/conversationCompactor';
+import { PerformanceTuner } from '../services/performanceTuner';
+import { ResponseCache } from '../services/responseCache';
 import {
   ChatSession,
   OllamaChatMessage,
@@ -19,11 +21,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private currentSession: ChatSession;
   private currentModel: SupportedModel;
-  private readonly projectDetector: ProjectDetector;
-  private readonly styleAnalyzer: StyleAnalyzer;
-  private readonly promptEngine: PromptEngine;
-  private readonly relevanceRanker: RelevanceRanker;
-  private readonly compactor: ConversationCompactor;
+
+  // Lazy-initialized services (only created on first use)
+  private _projectDetector?: ProjectDetector;
+  private _styleAnalyzer?: StyleAnalyzer;
+  private _promptEngine?: PromptEngine;
+  private _relevanceRanker?: RelevanceRanker;
+  private _compactor?: ConversationCompactor;
+  private _performanceTuner?: PerformanceTuner;
+  private _responseCache?: ResponseCache;
+
+  // Lazy getters — services are only instantiated on first message
+  private get projectDetector(): ProjectDetector {
+    return this._projectDetector ??= new ProjectDetector();
+  }
+  private get styleAnalyzer(): StyleAnalyzer {
+    return this._styleAnalyzer ??= new StyleAnalyzer();
+  }
+  private get promptEngine(): PromptEngine {
+    return this._promptEngine ??= new PromptEngine();
+  }
+  private get relevanceRanker(): RelevanceRanker {
+    return this._relevanceRanker ??= new RelevanceRanker();
+  }
+  private get compactor(): ConversationCompactor {
+    return this._compactor ??= new ConversationCompactor(this.ollamaService);
+  }
+  private get performanceTuner(): PerformanceTuner {
+    return this._performanceTuner ??= new PerformanceTuner();
+  }
+  private get responseCache(): ResponseCache {
+    return this._responseCache ??= new ResponseCache();
+  }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -37,11 +66,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       'codellama'
     );
     this.currentSession = this.createNewSession();
-    this.projectDetector = new ProjectDetector();
-    this.styleAnalyzer = new StyleAnalyzer();
-    this.promptEngine = new PromptEngine();
-    this.relevanceRanker = new RelevanceRanker();
-    this.compactor = new ConversationCompactor(ollamaService);
   }
 
   resolveWebviewView(
@@ -126,9 +150,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.currentSession.messages.push({ role: 'user', content: text });
 
     const config = vscode.workspace.getConfiguration('ollamaChat');
-    const contextWindowSize = config.get<number>('contextWindowSize', 4096);
 
-    // 1. Auto-detect project info and coding style in parallel
+    // 1. Get optimal performance params for this system
+    const systemProfile = await this.performanceTuner.profileSystem();
+    const perfParams = this.performanceTuner.getOptimalParams(systemProfile);
+
+    // Use adaptive context window: override user setting if system is constrained
+    const configuredCtx = config.get<number>('contextWindowSize', 4096);
+    const contextWindowSize = Math.min(configuredCtx, perfParams.num_ctx);
+
+    // 2. Check response cache (skip LLM call if we have a cached answer)
+    const contextHash = this.responseCache.hashContext(
+      this.contextService.getFiles().map(f => f.uri)
+    );
+    const cachedResponse = this.responseCache.get(text, this.currentModel, contextHash);
+    if (cachedResponse && this.currentSession.messages.length <= 2) {
+      // Only use cache for first-turn queries (no conversation context needed)
+      this.postMessage({ type: 'streamChunk', content: cachedResponse });
+      this.postMessage({ type: 'streamEnd' });
+      this.currentSession.messages.push({
+        role: 'assistant',
+        content: cachedResponse,
+      });
+      this.saveSession();
+      return;
+    }
+
+    // 3. Auto-detect project info and coding style in parallel
     const [projectInfo, codingStyle] = await Promise.all([
       this.projectDetector.detect(),
       this.styleAnalyzer.analyze(
@@ -136,11 +184,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ),
     ]);
 
-    // 2. Detect task type from query
+    // 4. Detect task type from query
     const taskType = this.promptEngine.detectTaskType(text);
 
-    // 3. Rank and select relevant context files within token budget
-    // Reserve ~40% of context window for system prompt + context
+    // 5. Rank and select relevant context files within token budget
+    // Reserve ~35% of context window for system prompt + context
     const contextTokenBudget = Math.floor(contextWindowSize * 0.35);
     const rankedContext = await this.relevanceRanker.rankAndSelect(
       this.contextService.getFiles(),
@@ -148,7 +196,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       contextTokenBudget
     );
 
-    // 4. Build model-specific system prompt
+    // 6. Build model-specific system prompt
     const systemPrompt = this.promptEngine.buildSystemPrompt({
       model: this.currentModel,
       task: taskType,
@@ -158,7 +206,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       userQuery: text,
     });
 
-    // 5. Compact conversation history to fit remaining budget
+    // 7. Compact conversation history to fit remaining budget
     const compactedHistory = await this.compactor.compact(
       this.currentSession.messages,
       systemPrompt,
@@ -166,7 +214,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.currentModel
     );
 
-    // 6. Assemble final messages
+    // 8. Assemble final messages
     const systemMessage: OllamaChatMessage = {
       role: 'system',
       content: systemPrompt,
@@ -177,7 +225,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       let fullResponse = '';
       for await (const chunk of this.ollamaService.chatStream(
         messagesToSend,
-        this.currentModel
+        this.currentModel,
+        {
+          num_ctx: contextWindowSize,
+          num_thread: perfParams.num_thread,
+          num_gpu: perfParams.num_gpu,
+          num_batch: perfParams.num_batch,
+          low_vram: perfParams.low_vram,
+          keep_alive: perfParams.keep_alive,
+        }
       )) {
         fullResponse += chunk;
         this.postMessage({ type: 'streamChunk', content: chunk });
@@ -187,6 +243,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         role: 'assistant',
         content: fullResponse,
       });
+
+      // Cache the response for future identical queries
+      this.responseCache.set(text, this.currentModel, contextHash, fullResponse);
+
       this.saveSession();
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
