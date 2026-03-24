@@ -36,12 +36,33 @@ ollama pull codellama
 ollama pull deepseek-coder
 ```
 
-### 3. Start Chatting
+### 3. Install the VS Code Extension
+
+Choose one of the following:
+
+1. Install from a packaged `.vsix`:
+
+   ```bash
+   git clone https://github.com/jmcdonald69124/ollama-vscode-local.git
+   cd ollama-vscode-local
+   npm install
+   npx @vscode/vsce package
+   code --install-extension ollama-chat-local-0.1.0.vsix
+   ```
+
+2. Or run it directly from source for development:
+
+   - Open this repo in VS Code
+   - Press `F5`
+   - A new Extension Development Host window will open with the extension loaded
+
+### 4. Start Chatting
 
 1. Open VS Code
-2. Click the Ollama Chat icon in the Activity Bar (sidebar)
-3. Select your preferred model
-4. Start asking questions!
+2. If you installed from source, use the Extension Development Host window
+3. Click the Ollama Chat icon in the Activity Bar (sidebar)
+4. Select your preferred model
+5. Start asking questions!
 
 ## Model Comparison
 
