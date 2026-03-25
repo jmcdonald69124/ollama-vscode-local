@@ -32,6 +32,7 @@
   ],
   "activationEvents": [
     "onView:ollamaChat.chatView",
+    "onChatParticipant:ollama-chat-local.ollama",
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
@@ -54,6 +55,46 @@
         }
       ]
     },
+    "chatParticipants": [
+      {
+        "id": "ollama-chat-local.ollama",
+        "name": "ollama",
+        "fullName": "Ollama Local",
+        "description": "Ask local Ollama models about code in your workspace",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "explain",
+            "description": "Explain code, behavior, or architecture"
+          },
+          {
+            "name": "fix",
+            "description": "Suggest a bug fix with reasoning"
+          },
+          {
+            "name": "tests",
+            "description": "Generate or improve tests"
+          }
+        ],
+        "disambiguation": [
+          {
+            "category": "local-ollama-coding",
+            "description": "The user wants offline or local-model coding help, code explanations, or code fixes using Ollama.",
+            "examples": [
+              "Use my local Ollama model to explain this file",
+              "Fix this TypeScript error with ollama",
+              "Generate tests using local AI"
+            ]
+          }
+        ]
+      }
+    ],
+    "languageModelChatProviders": [
+      {
+        "vendor": "ollama-local",
+        "displayName": "Ollama Local"
+      }
+    ],
     "commands": [
       {
         "command": "ollamaChat.newChat",

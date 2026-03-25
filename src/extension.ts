@@ -8,6 +8,8 @@ import { registerChatCommands } from './commands/chatCommands';
 import { registerContextCommands } from './commands/contextCommands';
 import { registerModelCommands } from './commands/modelCommands';
 import { registerSetupCommands } from './commands/setupCommands';
+import { registerChatParticipant } from './providers/chatParticipantProvider';
+import { registerLanguageModelProvider } from './providers/languageModelProvider';
 
 export function activate(context: vscode.ExtensionContext) {
   const ollamaService = new OllamaService();
@@ -33,6 +35,8 @@ export function activate(context: vscode.ExtensionContext) {
   registerContextCommands(context, contextService, chatProvider);
   registerModelCommands(context, ollamaService, chatProvider);
   registerSetupCommands(context, ollamaService);
+  registerChatParticipant(context, ollamaService, contextService);
+  registerLanguageModelProvider(context, ollamaService);
 
   // Register performance-related commands
   context.subscriptions.push(

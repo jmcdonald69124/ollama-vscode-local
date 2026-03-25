@@ -4,6 +4,7 @@ A VS Code extension that provides a chat interface for interacting with local Ol
 
 ## Features
 
+- **Native VS Code Chat Participant** - Use `@ollama` directly in the Chat window
 - **Chat Interface** — A sidebar chat panel that feels like native VS Code AI chat
 - **Model Selection** — Choose between CodeLlama and DeepSeek-Coder
 - **Streaming Responses** — Real-time token streaming for responsive interaction
@@ -64,9 +65,11 @@ If you are developing the extension instead of just using it, see [Installing th
 
 1. Open VS Code
 2. If you installed from source, use the Extension Development Host window
-3. Click the Ollama Chat icon in the Activity Bar (sidebar)
-4. Select your preferred model
-5. Start asking questions!
+3. Open the Chat view and mention `@ollama` to use local Ollama in native chat
+4. Optionally use slash commands: `/explain`, `/fix`, `/tests`
+5. Or click the Ollama Chat icon in the Activity Bar (sidebar) to use the dedicated panel
+6. Select your preferred model
+7. Start asking questions!
 
 ## Model Comparison
 
