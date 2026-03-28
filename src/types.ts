@@ -49,6 +49,14 @@ export interface ContextFile {
 
 export type SupportedModel = 'codellama' | 'deepseek-coder';
 
+export interface SetupStatus {
+  ollamaInstalled: boolean;
+  ollamaRunning: boolean;
+  modelsAvailable: string[];
+  selectedModelInstalled: boolean;
+  selectedModel: string;
+}
+
 export type ExtensionToWebviewMessage =
   | { type: 'streamChunk'; content: string }
   | { type: 'streamEnd' }
@@ -57,7 +65,8 @@ export type ExtensionToWebviewMessage =
   | { type: 'contextFilesUpdated'; files: ContextFile[] }
   | { type: 'ollamaStatus'; connected: boolean; models: string[] }
   | { type: 'restoreState'; session: ChatSession | null }
-  | { type: 'addUserMessage'; text: string };
+  | { type: 'addUserMessage'; text: string }
+  | { type: 'setupStatus'; status: SetupStatus };
 
 export type WebviewToExtensionMessage =
   | { type: 'sendMessage'; text: string }
@@ -70,4 +79,7 @@ export type WebviewToExtensionMessage =
   | { type: 'requestState' }
   | { type: 'openSettings' }
   | { type: 'insertCodeToEditor'; code: string; language: string }
-  | { type: 'checkConnection' };
+  | { type: 'checkConnection' }
+  | { type: 'openSetupGuide' }
+  | { type: 'pullModel'; model: string }
+  | { type: 'recommendModels' };

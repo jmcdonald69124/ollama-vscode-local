@@ -133,6 +133,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           case 'checkConnection':
             this.checkAndReportConnection();
             break;
+          case 'openSetupGuide':
+            vscode.commands.executeCommand(
+              'workbench.action.openWalkthrough',
+              'ollama-chat.ollamaChat.setup',
+              false
+            );
+            break;
+          case 'pullModel':
+            vscode.commands.executeCommand('ollamaChat.pullModel', msg.model);
+            break;
+          case 'recommendModels':
+            vscode.commands.executeCommand('ollamaChat.recommendModels');
+            break;
         }
       }
     );
@@ -272,6 +285,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
     this.postMessage({ type: 'ollamaStatus', connected, models });
+
+    // Send detailed setup status for onboarding UI
+    const selectedModelInstalled = models.some(
+      (m) => m.startsWith(this.currentModel)
+    );
+    this.postMessage({
+      type: 'setupStatus',
+      status: {
+        ollamaInstalled: connected, // If we can connect, it's installed
+        ollamaRunning: connected,
+        modelsAvailable: models,
+        selectedModelInstalled,
+        selectedModel: this.currentModel,
+      },
+    });
   }
 
   postMessage(msg: ExtensionToWebviewMessage): void {
@@ -371,7 +399,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         </div>
 
         <div id="connection-banner" style="display:none">
-            <span>Ollama is not connected.</span>
+            <span>Ollama is not running. Run <code>ollama serve</code> or install from ollama.ai</span>
             <button id="retry-connection-btn" class="small-btn">Retry</button>
             <button id="setup-btn" class="small-btn">Setup Guide</button>
         </div>
@@ -379,21 +407,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <div id="messages">
             <div id="welcome-message" class="welcome">
                 <h2>Ollama Chat</h2>
-                <p>Your local AI coding assistant. Ask questions about your code, generate snippets, or get explanations.</p>
-                <div class="welcome-hints">
-                    <p><strong>Quick tips:</strong></p>
-                    <ul>
-                        <li>Right-click code in the editor to ask about it</li>
-                        <li>Add context files for codebase-aware responses</li>
-                        <li>Use the model selector to switch between CodeLlama and DeepSeek-Coder</li>
-                    </ul>
-                </div>
+                <p>Checking setup...</p>
             </div>
         </div>
 
         <div id="input-area">
             <div id="input-wrapper">
-                <textarea id="user-input" placeholder="Ask a question..." rows="1"></textarea>
+                <textarea id="user-input" placeholder="Checking Ollama connection..." rows="1" disabled></textarea>
                 <button id="send-btn" title="Send message">Send</button>
                 <button id="stop-btn" title="Stop generation" style="display:none">Stop</button>
             </div>

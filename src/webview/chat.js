@@ -24,6 +24,7 @@
   let currentAssistantEl = null;
   let currentAssistantContent = '';
   let contextDrawerOpen = false;
+  let isOllamaReady = false; // Track whether Ollama is connected AND model is available
 
   // Request initial state
   vscode.postMessage({ type: 'requestState' });
@@ -66,7 +67,7 @@
   });
 
   setupBtn.addEventListener('click', () => {
-    vscode.postMessage({ type: 'openSettings' });
+    vscode.postMessage({ type: 'openSetupGuide' });
   });
 
   // --- Message handler ---
@@ -91,6 +92,9 @@
       case 'ollamaStatus':
         updateConnectionStatus(msg.connected, msg.models);
         break;
+      case 'setupStatus':
+        updateSetupStatus(msg.status);
+        break;
       case 'restoreState':
         restoreSession(msg.session);
         break;
@@ -106,6 +110,15 @@
     const text = userInput.value.trim();
     if (!text || isStreaming) return;
 
+    // Warn if Ollama isn't ready
+    if (!isOllamaReady) {
+      addMessageToUI(
+        'error',
+        'Ollama is not ready. Please complete the setup steps above before chatting.\n\nClick "Open Setup Guide" for step-by-step instructions.'
+      );
+      return;
+    }
+
     addMessageToUI('user', text);
     userInput.value = '';
     autoResize();
@@ -120,7 +133,6 @@
     stopBtn.style.display = 'inline-block';
     userInput.disabled = true;
 
-    // Create assistant message placeholder
     currentAssistantContent = '';
     currentAssistantEl = addMessageToUI('assistant', '');
     const contentEl = currentAssistantEl.querySelector('.message-content');
@@ -168,10 +180,20 @@
       currentAssistantEl.remove();
     }
 
-    addMessageToUI(
-      'error',
-      'Error: ' + error + '\n\nMake sure Ollama is running and the model is pulled.'
-    );
+    // Provide actionable error messages
+    let errorMsg = 'Error: ' + error;
+
+    if (error.includes('ECONNREFUSED') || error.includes('fetch failed') || error.includes('Failed to fetch')) {
+      errorMsg += '\n\n**Ollama is not running.** Start it with:\n```bash\nollama serve\n```\nOr download it from https://ollama.ai/download';
+    } else if (error.includes('model') && (error.includes('not found') || error.includes('404'))) {
+      errorMsg += '\n\n**The selected model is not installed.** Pull it with:\n```bash\nollama pull ' + (modelName.textContent || 'codellama') + '\n```\nOr click the model name above to choose a different one.';
+    } else if (error.includes('timeout') || error.includes('Timeout')) {
+      errorMsg += '\n\n**The request timed out.** This can happen if:\n- The model is still loading (first request takes longer)\n- Your system doesn\'t have enough RAM for this model\n- Try a smaller model variant (use "Ollama Chat: Recommend Models" command)';
+    } else {
+      errorMsg += '\n\n**Troubleshooting:**\n1. Check that Ollama is running: `ollama serve`\n2. Check that a model is pulled: `ollama list`\n3. Try the Setup Guide for step-by-step help';
+    }
+
+    addMessageToUI('error', errorMsg);
 
     currentAssistantEl = null;
     currentAssistantContent = '';
@@ -179,8 +201,10 @@
   }
 
   function addMessageToUI(role, content) {
-    if (welcomeMessage) {
-      welcomeMessage.style.display = 'none';
+    // Hide welcome message when chat starts
+    const welcome = document.getElementById('welcome-message');
+    if (welcome && role !== 'setup') {
+      welcome.style.display = 'none';
     }
 
     const messageEl = document.createElement('div');
@@ -189,20 +213,16 @@
     const icons = { user: '\u{1F464}', assistant: '\u{1F916}', error: '\u26A0\uFE0F' };
     const labels = { user: 'You', assistant: 'Assistant', error: 'Error' };
 
-    messageEl.innerHTML = `
-      <div class="message-header">
-        <span class="role-icon">${icons[role] || ''}</span>
-        <span>${labels[role] || role}</span>
-      </div>
-      <div class="message-content">${
-        role === 'assistant' ? '' : escapeHtml(content)
-      }</div>
-    `;
+    messageEl.innerHTML = [
+      '<div class="message-header">',
+      '  <span class="role-icon">' + (icons[role] || '') + '</span>',
+      '  <span>' + (labels[role] || role) + '</span>',
+      '</div>',
+      '<div class="message-content"></div>',
+    ].join('\n');
 
-    if (role !== 'assistant') {
-      const contentEl = messageEl.querySelector('.message-content');
-      contentEl.innerHTML = renderMarkdown(content);
-    }
+    const contentEl = messageEl.querySelector('.message-content');
+    contentEl.innerHTML = renderMarkdown(content);
 
     messagesContainer.appendChild(messageEl);
     scrollToBottom();
@@ -210,30 +230,162 @@
   }
 
   function restoreSession(session) {
-    // Clear messages
     messagesContainer.innerHTML = '';
 
     if (!session || session.messages.length === 0) {
-      messagesContainer.innerHTML = `
-        <div id="welcome-message" class="welcome">
-          <h2>Ollama Chat</h2>
-          <p>Your local AI coding assistant. Ask questions about your code, generate snippets, or get explanations.</p>
-          <div class="welcome-hints">
-            <p><strong>Quick tips:</strong></p>
-            <ul>
-              <li>Right-click code in the editor to ask about it</li>
-              <li>Add context files for codebase-aware responses</li>
-              <li>Use the model selector to switch between CodeLlama and DeepSeek-Coder</li>
-            </ul>
-          </div>
-        </div>
-      `;
+      showWelcomeScreen();
       return;
     }
 
     for (const msg of session.messages) {
       if (msg.role === 'system') continue;
       addMessageToUI(msg.role, msg.content);
+    }
+  }
+
+  /**
+   * Show the welcome screen with setup requirements prominently displayed.
+   */
+  function showWelcomeScreen() {
+    messagesContainer.innerHTML = [
+      '<div id="welcome-message" class="welcome">',
+      '  <h2>Ollama Chat</h2>',
+      '  <p>Local AI coding assistant — runs entirely on your machine, no internet required.</p>',
+      '',
+      '  <div class="setup-required">',
+      '    <div class="setup-header">',
+      '      <span class="setup-icon">\u{1F6E0}\uFE0F</span>',
+      '      <strong>Setup Required</strong>',
+      '    </div>',
+      '    <p class="setup-note">This extension requires <strong>Ollama</strong> to be installed and running locally with at least one coding model downloaded. It does not work out of the box.</p>',
+      '',
+      '    <div class="setup-steps">',
+      '      <div class="setup-step" id="step-ollama">',
+      '        <span class="step-status" id="step-ollama-status">\u{25CB}</span>',
+      '        <div class="step-content">',
+      '          <strong>Step 1: Install Ollama</strong>',
+      '          <p>Download from <code>ollama.ai/download</code> (macOS, Linux, Windows)</p>',
+      '        </div>',
+      '      </div>',
+      '',
+      '      <div class="setup-step" id="step-running">',
+      '        <span class="step-status" id="step-running-status">\u{25CB}</span>',
+      '        <div class="step-content">',
+      '          <strong>Step 2: Start Ollama</strong>',
+      '          <p>Run <code>ollama serve</code> in a terminal (may auto-start on install)</p>',
+      '        </div>',
+      '      </div>',
+      '',
+      '      <div class="setup-step" id="step-model">',
+      '        <span class="step-status" id="step-model-status">\u{25CB}</span>',
+      '        <div class="step-content">',
+      '          <strong>Step 3: Pull a coding model</strong>',
+      '          <p>Run <code>ollama pull codellama</code> or <code>ollama pull deepseek-coder</code></p>',
+      '        </div>',
+      '      </div>',
+      '    </div>',
+      '',
+      '    <div class="setup-actions">',
+      '      <button class="setup-action-btn" id="welcome-setup-guide-btn">Open Setup Guide</button>',
+      '      <button class="setup-action-btn secondary" id="welcome-check-btn">Check Connection</button>',
+      '      <button class="setup-action-btn secondary" id="welcome-recommend-btn">Recommend Models</button>',
+      '    </div>',
+      '  </div>',
+      '',
+      '  <div class="welcome-hints" id="ready-hints" style="display:none">',
+      '    <p><strong>You\'re all set! Quick tips:</strong></p>',
+      '    <ul>',
+      '      <li>Right-click code in the editor to ask about it</li>',
+      '      <li>Add context files for codebase-aware responses</li>',
+      '      <li>Use the model selector to switch between CodeLlama and DeepSeek-Coder</li>',
+      '    </ul>',
+      '  </div>',
+      '</div>',
+    ].join('\n');
+
+    // Bind welcome screen buttons
+    var guideBtn = document.getElementById('welcome-setup-guide-btn');
+    if (guideBtn) {
+      guideBtn.addEventListener('click', function () {
+        vscode.postMessage({ type: 'openSetupGuide' });
+      });
+    }
+    var checkBtn = document.getElementById('welcome-check-btn');
+    if (checkBtn) {
+      checkBtn.addEventListener('click', function () {
+        connectionStatus.className = 'status-dot checking';
+        vscode.postMessage({ type: 'checkConnection' });
+      });
+    }
+    var recommendBtn = document.getElementById('welcome-recommend-btn');
+    if (recommendBtn) {
+      recommendBtn.addEventListener('click', function () {
+        vscode.postMessage({ type: 'recommendModels' });
+      });
+    }
+  }
+
+  /**
+   * Update the setup checklist in the welcome screen based on actual status.
+   */
+  function updateSetupStatus(status) {
+    isOllamaReady = status.ollamaRunning && status.selectedModelInstalled;
+
+    // Update input placeholder based on readiness
+    if (isOllamaReady) {
+      userInput.placeholder = 'Ask a question...';
+      userInput.disabled = false;
+    } else {
+      userInput.placeholder = 'Complete setup above to start chatting...';
+    }
+
+    // Update welcome screen step indicators
+    var ollamaStatus = document.getElementById('step-ollama-status');
+    var runningStatus = document.getElementById('step-running-status');
+    var modelStatus = document.getElementById('step-model-status');
+    var readyHints = document.getElementById('ready-hints');
+    var setupRequired = document.querySelector('.setup-required');
+
+    if (ollamaStatus) {
+      ollamaStatus.textContent = status.ollamaRunning ? '\u2705' : '\u274C';
+      ollamaStatus.closest('.setup-step').className =
+        'setup-step ' + (status.ollamaRunning ? 'done' : 'pending');
+    }
+    if (runningStatus) {
+      runningStatus.textContent = status.ollamaRunning ? '\u2705' : '\u274C';
+      runningStatus.closest('.setup-step').className =
+        'setup-step ' + (status.ollamaRunning ? 'done' : 'pending');
+    }
+    if (modelStatus) {
+      if (status.selectedModelInstalled) {
+        modelStatus.textContent = '\u2705';
+        modelStatus.closest('.setup-step').className = 'setup-step done';
+      } else if (status.ollamaRunning && status.modelsAvailable.length > 0) {
+        // Has some models but not the selected one
+        modelStatus.textContent = '\u26A0\uFE0F';
+        modelStatus.closest('.setup-step').className = 'setup-step warning';
+        var stepContent = modelStatus.closest('.setup-step').querySelector('.step-content p');
+        if (stepContent) {
+          stepContent.innerHTML =
+            'Model <code>' + escapeHtml(status.selectedModel) + '</code> not found. Available: ' +
+            status.modelsAvailable.slice(0, 3).map(function(m) { return '<code>' + escapeHtml(m) + '</code>'; }).join(', ') +
+            '. Run <code>ollama pull ' + escapeHtml(status.selectedModel) + '</code>';
+        }
+      } else {
+        modelStatus.textContent = '\u274C';
+        modelStatus.closest('.setup-step').className = 'setup-step pending';
+      }
+    }
+
+    // Show/hide ready hints vs setup required
+    if (readyHints && setupRequired) {
+      if (isOllamaReady) {
+        setupRequired.style.display = 'none';
+        readyHints.style.display = 'block';
+      } else {
+        setupRequired.style.display = 'block';
+        readyHints.style.display = 'none';
+      }
     }
   }
 
@@ -249,11 +401,10 @@
     for (const file of files) {
       const item = document.createElement('div');
       item.className = 'context-item';
-      item.innerHTML = `
-        <span title="${escapeHtml(file.uri)}">${escapeHtml(file.relativePath)}</span>
-        <button class="remove-btn" title="Remove">\u00D7</button>
-      `;
-      item.querySelector('.remove-btn').addEventListener('click', () => {
+      item.innerHTML =
+        '<span title="' + escapeHtml(file.uri) + '">' + escapeHtml(file.relativePath) + '</span>' +
+        '<button class="remove-btn" title="Remove">\u00D7</button>';
+      item.querySelector('.remove-btn').addEventListener('click', function() {
         vscode.postMessage({ type: 'removeContextFile', uri: file.uri });
       });
       contextList.appendChild(item);
@@ -316,37 +467,25 @@
         continue;
       }
 
-      // Headers
       if (line.startsWith('### ')) {
         html += '<h3>' + renderInline(line.slice(4)) + '</h3>';
       } else if (line.startsWith('## ')) {
         html += '<h2>' + renderInline(line.slice(3)) + '</h2>';
       } else if (line.startsWith('# ')) {
         html += '<h1>' + renderInline(line.slice(2)) + '</h1>';
-      }
-      // Unordered list
-      else if (line.match(/^[\s]*[-*]\s/)) {
+      } else if (line.match(/^[\s]*[-*]\s/)) {
         html += '<li>' + renderInline(line.replace(/^[\s]*[-*]\s/, '')) + '</li>';
-      }
-      // Ordered list
-      else if (line.match(/^[\s]*\d+\.\s/)) {
+      } else if (line.match(/^[\s]*\d+\.\s/)) {
         html += '<li>' + renderInline(line.replace(/^[\s]*\d+\.\s/, '')) + '</li>';
-      }
-      // Horizontal rule
-      else if (line.match(/^---+$/)) {
+      } else if (line.match(/^---+$/)) {
         html += '<hr>';
-      }
-      // Empty line
-      else if (line.trim() === '') {
+      } else if (line.trim() === '') {
         html += '<br>';
-      }
-      // Paragraph
-      else {
+      } else {
         html += '<p>' + renderInline(line) + '</p>';
       }
     }
 
-    // Handle unclosed code block (streaming)
     if (inCodeBlock) {
       html += renderCodeBlock(codeContent, codeLang);
     }
@@ -356,13 +495,9 @@
 
   function renderInline(text) {
     let result = escapeHtml(text);
-    // Bold
     result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    // Italic
     result = result.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    // Inline code
     result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Links
     result = result.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       '<a href="$2" title="$1">$1</a>'
@@ -375,32 +510,28 @@
     const langLabel = lang || 'text';
     const id = 'code-' + Math.random().toString(36).substring(2, 8);
 
-    return `
-      <div class="code-block-wrapper">
-        <div class="code-block-header">
-          <span>${escapeHtml(langLabel)}</span>
-          <div class="code-block-actions">
-            <button class="code-action-btn" onclick="copyCode('${id}')">Copy</button>
-            <button class="code-action-btn" onclick="insertCode('${id}', '${escapeHtml(langLabel)}')">Insert</button>
-          </div>
-        </div>
-        <pre><code id="${id}">${escapedCode}</code></pre>
-      </div>
-    `;
+    return [
+      '<div class="code-block-wrapper">',
+      '  <div class="code-block-header">',
+      '    <span>' + escapeHtml(langLabel) + '</span>',
+      '    <div class="code-block-actions">',
+      '      <button class="code-action-btn" onclick="copyCode(\'' + id + '\')">Copy</button>',
+      '      <button class="code-action-btn" onclick="insertCode(\'' + id + '\', \'' + escapeHtml(langLabel) + '\')">Insert</button>',
+      '    </div>',
+      '  </div>',
+      '  <pre><code id="' + id + '">' + escapedCode + '</code></pre>',
+      '</div>',
+    ].join('\n');
   }
 
-  // Global functions for code block buttons
   window.copyCode = function (id) {
     const codeEl = document.getElementById(id);
     if (codeEl) {
       navigator.clipboard.writeText(codeEl.textContent || '');
-      // Brief visual feedback
       const btn = codeEl.closest('.code-block-wrapper').querySelector('.code-action-btn');
       const original = btn.textContent;
       btn.textContent = 'Copied!';
-      setTimeout(() => {
-        btn.textContent = original;
-      }, 1500);
+      setTimeout(function() { btn.textContent = original; }, 1500);
     }
   };
 
