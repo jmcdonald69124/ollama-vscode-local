@@ -222,13 +222,20 @@
     const icons = { user: '\u{1F464}', assistant: '\u{1F916}', error: '\u26A0\uFE0F' };
     const labels = { user: 'You', assistant: 'Assistant', error: 'Error' };
 
-    messageEl.innerHTML = [
-      '<div class="message-header">',
-      '  <span class="role-icon">' + (icons[role] || '') + '</span>',
-      '  <span>' + (labels[role] || role) + '</span>',
-      '</div>',
-      '<div class="message-content"></div>',
-    ].join('\n');
+    // Build header safely using DOM APIs to avoid XSS via role parameter
+    const headerEl = document.createElement('div');
+    headerEl.className = 'message-header';
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'role-icon';
+    iconSpan.textContent = icons[role] || '';
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = labels[role] || role;
+    headerEl.appendChild(iconSpan);
+    headerEl.appendChild(labelSpan);
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    messageEl.appendChild(headerEl);
+    messageEl.appendChild(contentDiv);
 
     if (role !== 'assistant') {
       const contentEl = messageEl.querySelector('.message-content');
@@ -573,7 +580,14 @@
     result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
     result = result.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" title="$1">$1</a>'
+      function(_match, label, url) {
+        // Block javascript: and data: URIs to prevent XSS
+        var normalizedUrl = url.trim().toLowerCase();
+        if (normalizedUrl.startsWith('javascript:') || normalizedUrl.startsWith('data:')) {
+          return escapeHtml(label);
+        }
+        return '<a href="' + url + '" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</a>';
+      }
     );
     return result;
   }
@@ -588,8 +602,8 @@
       '  <div class="code-block-header">',
       '    <span>' + escapeHtml(langLabel) + '</span>',
       '    <div class="code-block-actions">',
-      '      <button class="code-action-btn" onclick="copyCode(\'' + id + '\')">Copy</button>',
-      '      <button class="code-action-btn" onclick="insertCode(\'' + id + '\', \'' + escapeHtml(langLabel) + '\')">Insert</button>',
+      '      <button class="code-action-btn" data-action="copy" data-code-id="' + id + '">Copy</button>',
+      '      <button class="code-action-btn" data-action="insert" data-code-id="' + id + '" data-lang="' + escapeHtml(langLabel) + '">Insert</button>',
       '    </div>',
       '  </div>',
       '  <pre><code id="' + id + '">' + escapedCode + '</code></pre>',
@@ -597,25 +611,27 @@
     ].join('\n');
   }
 
-  window.copyCode = function (id) {
-    const codeEl = document.getElementById(id);
-    if (codeEl) {
+  // Event delegation for code block actions (avoids inline onclick XSS risk)
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.code-action-btn');
+    if (!btn) return;
+    const action = btn.getAttribute('data-action');
+    const codeId = btn.getAttribute('data-code-id');
+    if (!codeId) return;
+    const codeEl = document.getElementById(codeId);
+    if (!codeEl) return;
+
+    if (action === 'copy') {
       navigator.clipboard.writeText(codeEl.textContent || '');
-      const btn = codeEl.closest('.code-block-wrapper').querySelector('.code-action-btn');
       const original = btn.textContent;
       btn.textContent = 'Copied!';
       setTimeout(function() { btn.textContent = original; }, 1500);
-    }
-  };
-
-  window.insertCode = function (id, lang) {
-    const codeEl = document.getElementById(id);
-    if (codeEl) {
+    } else if (action === 'insert') {
       vscode.postMessage({
         type: 'insertCodeToEditor',
         code: codeEl.textContent || '',
-        language: lang,
+        language: btn.getAttribute('data-lang') || 'text',
       });
     }
-  };
+  });
 })();

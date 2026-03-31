@@ -87,6 +87,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       async (msg: WebviewToExtensionMessage) => {
         switch (msg.type) {
           case 'sendMessage':
+            if (typeof msg.text !== 'string' || msg.text.length === 0 || msg.text.length > 50_000) {
+              return;
+            }
             await this.handleUserMessage(msg.text);
             break;
           case 'cancelStream':
@@ -99,6 +102,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             vscode.commands.executeCommand('ollamaChat.addContextFile');
             break;
           case 'removeContextFile':
+            if (typeof msg.uri !== 'string' || msg.uri.length === 0) {
+              return;
+            }
             this.contextService.removeFile(msg.uri);
             break;
           case 'clearChat':
@@ -129,6 +135,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             );
             break;
           case 'insertCodeToEditor':
+            if (typeof msg.code !== 'string' || typeof msg.language !== 'string') {
+              return;
+            }
             this.insertCodeToEditor(msg.code, msg.language);
             break;
           case 'checkConnection':

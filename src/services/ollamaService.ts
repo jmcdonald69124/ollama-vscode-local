@@ -9,8 +9,9 @@ import {
 
 const SAFE_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 const DEFAULT_SERVER_URL = 'http://localhost:11434';
-/** Allowed characters for model names: alphanumeric, dash, dot, colon, slash */
-const MODEL_NAME_RE = /^[a-zA-Z0-9._:/-]{1,200}$/;
+/** Allowed characters for model names: alphanumeric, dash, dot, colon */
+const MODEL_NAME_RE = /^[a-zA-Z0-9._:-]{1,200}$/;
+const MAX_JSON_LINE_LENGTH = 1_000_000; // 1MB limit per JSON line
 
 export class OllamaService {
   private abortController: AbortController | null = null;
@@ -151,7 +152,7 @@ export class OllamaService {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.trim()) {
+          if (!line.trim() || line.length > MAX_JSON_LINE_LENGTH) {
             continue;
           }
           try {
@@ -175,7 +176,7 @@ export class OllamaService {
       }
 
       // Process any remaining buffer
-      if (buffer.trim()) {
+      if (buffer.trim() && buffer.length <= MAX_JSON_LINE_LENGTH) {
         try {
           const chunk: OllamaChatResponseChunk = JSON.parse(buffer);
           if (chunk.message?.tool_calls) {
