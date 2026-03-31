@@ -1,20 +1,32 @@
 # Building a Local AI Coding Assistant: VS Code + Ollama + Small Language Models
 
-## The Premise
+## Why I Built This (And Why You Probably Shouldn't)
 
-GitHub Copilot Chat changed how developers interact with code. But it requires an internet connection, sends your code to external servers, and costs money. What if you could have the same experience — a chat sidebar in VS Code, context-aware code assistance, streaming responses — running entirely on your laptop, with zero cloud dependency?
+Let me get the awkward part out of the way first: **this is not the best way for most people to interact with an AI coding assistant.** GitHub Copilot, Claude, ChatGPT — they're better. The models are bigger, the context windows are massive, tool calling actually works, and you don't have to install three separate things before you can ask a question about your code.
 
-That's what we built: an open-source VS Code extension that connects to Ollama, giving you a local, private, offline-first AI coding assistant. This article covers the full journey — the architecture, the pain points, and honest thoughts on where small language models actually stand for coding tasks.
+So why build this?
+
+Because sometimes you're on a plane. Or working on a classified codebase. Or you're in a country with unreliable internet. Or you just fundamentally don't want your proprietary code leaving your machine. Or — honestly — because you wanted to understand how these things actually work under the hood instead of just consuming an API.
+
+This started as a learning project: how hard is it to replicate the Copilot Chat experience entirely locally, using Ollama and small open-source models? The answer is "harder than you'd think, and the result is worse than you'd hope, but the process teaches you a lot about how AI-assisted coding tools actually work."
+
+The full source is at [github.com/jmcdonald69124/ollama-vscode-local](https://github.com/jmcdonald69124/ollama-vscode-local) if you want to poke around.
 
 ---
 
-## The Architecture at a Glance
+## What We Actually Built
+
+An open-source VS Code extension (~5,300 lines of TypeScript, JavaScript, and CSS) that connects to Ollama running on localhost, giving you a chat sidebar and a Chat Participant (`@ollama`) that works in VS Code's native chat panel. It does context-aware code assistance, streaming responses, project detection, style analysis — the whole nine yards. All running on your laptop with zero cloud dependency.
+
+Here's the actual architecture:
 
 ```
 VS Code Extension
-├── Webview UI (HTML/CSS/JS chat interface)
-├── ChatViewProvider (orchestrates everything)
-├── OllamaService (REST API client, streaming)
+├── Webview UI (HTML/CSS/JS chat sidebar)
+├── Chat Participant Provider (@ollama in VS Code's chat panel)
+├── Language Model Provider (registers Ollama models with VS Code)
+├── ChatViewProvider (orchestrates the sidebar experience)
+├── OllamaService (REST API client, NDJSON streaming)
 ├── ContextService (workspace file management)
 ├── ProjectDetector (auto-detect language/framework)
 ├── StyleAnalyzer (detect coding conventions)
@@ -25,491 +37,221 @@ VS Code Extension
 └── ResponseCache (LRU cache with similarity matching)
 ```
 
-~4,600 lines of TypeScript and JavaScript. No external dependencies beyond VS Code's extension API and Ollama's REST endpoint.
+Every one of those is a real, functional service — no stubs. Whether they're all *necessary* is a different question. More on that later.
 
 ---
 
-## The Big Decision: Custom Webview vs. VS Code's Native Chat API
+## The Uncomfortable Truth: You Need VS Code's Proposed APIs
 
-This is where most of the interesting work lives, and where you'll spend most of your time if you attempt this.
+Here's where the reality check starts. If you want your local model to feel like a first-class citizen in VS Code — showing up in the native chat panel alongside Copilot, appearing in the model picker, responding to `@ollama` mentions — you need to use VS Code's **proposed APIs.** And that comes with real friction.
 
-VS Code offers two fundamentally different paths for building a chat experience:
+### What "Proposed API" Actually Means
 
-### Path 1: Custom Webview (What We Started With)
+VS Code has a staging system for new APIs. Before an API graduates to "stable" (available to all extensions on any VS Code install), it lives in "proposed" status. Proposed APIs work, but they come with strings attached:
 
-Build your own HTML/CSS/JS chat interface inside a `WebviewViewProvider`. You own every pixel — the message bubbles, the input box, the streaming renderer, the markdown parser, the code block syntax highlighting.
+1. You declare them in your `package.json`: `"enabledApiProposals": ["chatProvider"]`
+2. You download a separate `.d.ts` type definition file (in our case, `vscode.proposed.chatProvider.d.ts`) so TypeScript knows the API exists
+3. Your extension **will only run in VS Code Insiders** or in development mode (`F5` debug launch)
+
+That last point is the killer. You cannot publish an extension using proposed APIs to the VS Code Marketplace for regular VS Code users. Stable VS Code will simply refuse to activate it.
+
+### What This Means In Practice
+
+Our extension requires `"engines": { "vscode": "^1.100.0" }` and uses the `chatProvider` proposed API. This lets us register a `LanguageModelChatProvider` — which is the interface that lets Ollama models show up in VS Code's model picker and respond through the native chat infrastructure. Without it, we'd be limited to a standalone webview sidebar that feels like a completely separate app bolted onto VS Code.
+
+The `vscode.proposed.chatProvider.d.ts` file isn't a "patch" to VS Code itself — it's just TypeScript type declarations that tell the compiler these APIs exist. But you *do* need VS Code Insiders (or the debug host) to actually run the extension. Regular VS Code won't load it.
+
+**This is the biggest practical barrier for end users.** You're asking someone to:
+1. Install VS Code Insiders (not regular VS Code)
+2. Install Ollama
+3. Pull a model (multi-GB download)
+4. *Then* install and use your extension
+
+That's a lot of steps for most people. We include a walkthrough and an onboarding checklist that gates the chat input until everything is ready, but let's be honest — if your goal is "a convenient AI coding assistant," this isn't it. The convenience story belongs to cloud-based tools. This project is for a specific set of people with specific constraints (offline, private, curious), and it's important to be upfront about that.
+
+### The Chat Participant API vs. Custom Webview: We Did Both
+
+We actually ship both paths:
+
+**Path 1: Custom Webview Sidebar** — A full HTML/CSS/JS chat interface that works regardless of API availability. You get message bubbles, streaming, code blocks with copy/insert buttons, a context file drawer, connection status. It took ~2,000 lines of UI code plus the backend orchestration.
+
+**Path 2: Chat Participant API** — Registers `@ollama` in VS Code's native chat panel with three slash commands: `/explain`, `/fix`, `/tests`. Users type in the same chat box where they'd talk to Copilot. Gets free rendering, code block actions, variable resolution (`#file`, `#selection`), and conversation management from VS Code's chrome.
+
+The Chat Participant path is dramatically better UX — when it works. But it's gated behind the proposed API requirement. So the webview is the fallback for anyone not running Insiders or dev mode.
+
+**My honest take:** If VS Code ever stabilizes the `LanguageModelChatProvider` API (letting third-party extensions register as model backends for the native chat), this project becomes significantly more compelling. Until then, you're building for a niche within a niche.
+
+---
+
+## The Language Model Provider: Making Ollama a First-Class VS Code Model
+
+The most interesting architectural piece isn't the chat UI — it's the `LanguageModelChatProvider`. This is the interface that lets your extension tell VS Code: "Hey, I have language models available. Here are their names, here are their capabilities. When you need a response, call me."
 
 ```typescript
-class ChatViewProvider implements vscode.WebviewViewProvider {
-    resolveWebviewView(webviewView: vscode.WebviewView) {
-        webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
-        webviewView.webview.onDidReceiveMessage(msg => this.handleMessage(msg));
-    }
-}
-```
+export function registerLanguageModelProvider(
+    context: vscode.ExtensionContext,
+    ollamaService: OllamaService
+) {
+    const provider: vscode.LanguageModelChatProvider = {
+        async provideLanguageModelChatInformation() {
+            // Query Ollama for installed models
+            // Return them as LanguageModelChatInformation objects
+            // Tell VS Code which ones support tool calling
+        },
 
-**Pros:** Total control. Your chat looks and behaves exactly how you want.
-
-**Cons:** You're reimplementing everything GitHub Copilot Chat already does. Message rendering, code block actions (copy, insert, apply diff), conversation history, keyboard shortcuts, accessibility — all of it. That's not a weekend project, it's a months-long UI effort to reach parity with the native experience users already know.
-
-### Path 2: VS Code Chat Participant API (Where the Real Magic Is)
-
-This is the path that gets you into the **actual VS Code chat window** — the same panel where users talk to `@workspace`, `@terminal`, and `@vscode`. Your extension registers as a **chat participant**, and users invoke it with `@ollama explain this function`.
-
-```typescript
-const participant = vscode.chat.createChatParticipant(
-    'ollama-chat.ollama',
-    async (request: vscode.ChatRequest, context: vscode.ChatContext,
-           response: vscode.ChatResponseStream, token: vscode.CancellationToken) => {
-
-        // Stream tokens directly into VS Code's native chat UI
-        for await (const chunk of ollamaService.chatStream(messages, model)) {
-            response.markdown(chunk);
+        async *provideLanguageModelChatResponse(messages, options, extensions, token) {
+            // Convert VS Code message format → Ollama format
+            // Stream responses back as LanguageModelTextPart or LanguageModelToolCallPart
         }
-    }
-);
-
-participant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'ollama.png');
-```
-
-This is the approach that makes your local model feel like a first-class citizen alongside Copilot. The user types in the same chat box, sees the same message formatting, gets the same code block actions (copy, insert at cursor, apply as diff), and can switch between `@ollama` and `@workspace` mid-conversation.
-
-**But here's the catch:** The Chat Participant API is designed with the assumption that the model behind the participant is capable. It surfaces features — follow-up suggestions, inline code actions, reference resolution — that your participant needs to actually support. If your 7B model generates broken code and the user clicks "Apply in Editor," the experience is worse than not having the button at all.
-
-### The API Access Problem: Proposed APIs and the VS Code Patch
-
-Here's something the VS Code documentation buries: the Chat Participant API and the Language Model API (`vscode.lm`) have lived in different stages of "proposed" status for much of their existence. Proposed APIs are VS Code's staging ground — they work, but they come with friction. You need to add `"enabledApiProposals": ["chatParticipant", "languageModels"]` to your `package.json`, download the corresponding `vscode.proposed.chatParticipant.d.ts` and `vscode.proposed.languageModels.d.ts` type definition files into your project, and — critically — your extension will **only run in VS Code Insiders** or in development mode (`F5` debug launch). You cannot publish an extension using proposed APIs to the VS Code Marketplace for stable VS Code users. The `vscode.chat.createChatParticipant` API graduated to stable around VS Code 1.93, but the deeper integration points — `vscode.lm.registerTool` for tool registration, `ChatResponseStream` rich content parts, and the `LanguageModelChat` interface for accessing VS Code's built-in model routing — remain at various stages of proposed or finalized status that shift between releases. This means you're building against a moving target: what compiles today against `@types/vscode` 1.85 won't give you the Chat Participant types at all, while targeting 1.93+ gets you the participant API but not the tool registration API. Our workaround was to develop against VS Code Insiders with the full set of proposed APIs enabled, maintain a fallback webview path for stable VS Code users who can't access the chat panel integration, and pin our `@types/vscode` version to match our minimum supported VS Code engine version while pulling the proposed `.d.ts` files separately. It's not elegant, but it's the reality of building against APIs that are still solidifying. If you're starting this project today, target `"engines": { "vscode": "^1.93.0" }` at minimum to get the stable Chat Participant API, and accept that tool-related APIs may still require the proposed API dance.
-
-### The Integration Surface Area
-
-Registering a chat participant is the easy part. Making it feel native is where the work lives:
-
-**1. Streaming into `ChatResponseStream`**
-
-VS Code's `response.markdown()` expects well-formed markdown chunks. Ollama streams individual tokens — sometimes mid-word, sometimes mid-code-fence. You need a buffer that assembles coherent markdown fragments before pushing them to the response stream. Push too eagerly and you get flickering renders. Push too slowly and it feels laggy.
-
-```typescript
-let markdownBuffer = '';
-for await (const token of ollamaService.chatStream(messages, model)) {
-    markdownBuffer += token;
-
-    // Only flush on natural boundaries: end of line, end of code fence,
-    // or when buffer gets long enough that delay is noticeable
-    if (token.includes('\n') || markdownBuffer.length > 80) {
-        response.markdown(markdownBuffer);
-        markdownBuffer = '';
-    }
-}
-if (markdownBuffer) response.markdown(markdownBuffer);
-```
-
-**2. Handling `ChatContext` — Conversation History**
-
-The `ChatContext` object gives you the previous turns in the conversation. But it's VS Code's representation of history, not Ollama's. You need to transform `ChatContext.history` into the `{ role, content }` message array that Ollama expects, including any inline code references and file context that VS Code attached to previous turns.
-
-```typescript
-function buildOllamaMessages(context: vscode.ChatContext): OllamaChatMessage[] {
-    const messages: OllamaChatMessage[] = [];
-    for (const turn of context.history) {
-        if (turn instanceof vscode.ChatRequestTurn) {
-            messages.push({ role: 'user', content: turn.prompt });
-        } else if (turn instanceof vscode.ChatResponseTurn) {
-            // ResponseTurn contains parts — markdown, code, references
-            // You need to serialize these back into a single string
-            const content = turn.response
-                .map(part => {
-                    if (part instanceof vscode.ChatResponseMarkdownPart) {
-                        return part.value.value;
-                    }
-                    return '';
-                })
-                .join('');
-            messages.push({ role: 'assistant', content });
-        }
-    }
-    return messages;
+    };
 }
 ```
 
-**3. The `@` Mention and Slash Commands**
+When this works, your Ollama models appear in VS Code's model picker. Any extension that uses VS Code's `lm` API to request a language model response could, in theory, use your local Ollama model. The extension becomes infrastructure, not just a chat app.
 
-Once registered, users type `@ollama` to address your participant. You can also register slash commands for specific tasks:
-
-```typescript
-participant.followupProvider = {
-    provideFollowups(result, context, token) {
-        return [
-            { prompt: 'Explain this in more detail', participant: 'ollama-chat.ollama' },
-            { prompt: 'Write tests for this', participant: 'ollama-chat.ollama',
-              command: 'test' }
-        ];
-    }
-};
-```
-
-The challenge: follow-up suggestions need to be contextually relevant. Cloud models are good at generating these. A 7B local model? You're better off hardcoding common follow-ups per task type than asking the model to suggest them.
-
-**4. Variable Resolution — `#file`, `#selection`, `#editor`**
-
-VS Code chat supports variable references like `#file:src/index.ts` and `#selection`. When a user types `@ollama explain #selection`, VS Code resolves `#selection` to the actual selected text and passes it in `request.references`. Your participant needs to extract these and weave them into the prompt:
-
-```typescript
-for (const ref of request.references) {
-    if (ref.value instanceof vscode.Uri) {
-        // User referenced a file — read it and include as context
-        const content = await vscode.workspace.fs.readFile(ref.value);
-        contextFiles.push({ uri: ref.value, content: content.toString() });
-    } else if (ref.value instanceof vscode.Location) {
-        // User referenced a specific range — include just that snippet
-        const doc = await vscode.workspace.openTextDocument(ref.value.uri);
-        const text = doc.getText(ref.value.range);
-        contextSnippets.push(text);
-    }
-}
-```
-
-This is genuinely powerful — it gives your local model the same context injection that Copilot gets. But it also means your token budget gets eaten faster, and you're back to the context window management problem.
-
-### Why This Is Where You'll Spend Your Time
-
-The custom webview approach took ~2,000 lines of HTML/CSS/JS just for the UI. The Chat Participant API gives you all of that for free — but demands that you solve harder integration problems instead:
-
-- Mapping between VS Code's chat abstractions and Ollama's raw API
-- Graceful degradation when the model produces malformed output
-- Managing token budgets across VS Code-provided context and your own context injection
-- Making a 7B model's output look credible in the same UI where GPT-4/Claude responses appear
-
-The honest truth: **side-by-side with Copilot, local models look rough.** But that's also the most interesting design challenge — how do you build the UX to set appropriate expectations while still being genuinely useful?
+We report `toolCalling: true` for all models, then let Ollama and the model sort out whether tool calls actually happen. Optimistic? Yes. But the alternative is maintaining a per-model capability database, and the landscape changes too fast for that.
 
 ---
 
 ## The Tool Calling Gap: The Elephant in the Chat Room
 
-If you've used GitHub Copilot Chat or Claude in VS Code, you're accustomed to the model *doing things* — running terminal commands, reading files across your workspace, searching for symbols, editing code in place. That's not just the model being smart. That's **tool calling** (or function calling) — the model outputs structured requests like "read file X" or "run command Y," the host executes them, and feeds the results back.
+If you've used Copilot Chat or Claude in VS Code, you've watched the model *do things* — read files across your workspace, run terminal commands, search for symbols, edit code in place. That's not magic; it's **tool calling**. The model outputs structured JSON requests, VS Code executes them, and feeds results back.
 
-This is where local small models hit their hardest wall.
+This is where local models hit their hardest wall. And I want to be really honest about this, because it's the single biggest gap between local and cloud experiences.
 
-### How Tool Calling Works in VS Code Chat
+### What Actually Works
 
-VS Code's Chat API supports a tool-use pattern. You register tools that your participant can invoke:
+Our extension does pass tool definitions to Ollama's API when models that support function calling are used (Llama 3.1+, some Qwen variants, Mistral). The tool calls come back as structured objects in the streaming response, and we yield them as `LanguageModelToolCallPart` objects to VS Code. The plumbing is there.
 
-```typescript
-// Register a tool the model can call
-vscode.lm.registerTool('ollama-readFile', {
-    async invoke(options: vscode.LanguageModelToolInvocationOptions,
-                 token: vscode.CancellationToken) {
-        const filePath = options.input.filePath;
-        const content = await vscode.workspace.fs.readFile(
-            vscode.Uri.file(filePath)
-        );
-        return new vscode.LanguageModelToolResult([
-            new vscode.LanguageModelTextPart(content.toString())
-        ]);
-    }
-});
-```
+### What Doesn't Work (Reliably)
 
-The flow is: user asks a question → model decides it needs to read a file → model outputs a tool call → VS Code executes it → result goes back to the model → model incorporates it into its answer.
-
-Copilot makes this look seamless because GPT-4 and Claude have been specifically trained for structured tool calling. They reliably output JSON tool invocations in the expected format.
-
-### The Problem with Small Models and Tools
-
-**Most 7B-13B models were not trained for tool calling.** They don't reliably output structured JSON tool invocations. Ask CodeLlama to call a function and you'll get something like:
+Most 7B-13B models were not trained for tool calling. You ask CodeLlama to call a function and you get:
 
 ```
 I would suggest reading the file to understand the structure.
 Let me look at src/index.ts for you.
 ```
 
-That's a *description* of wanting to use a tool, not an actual tool call. The model talks about what it would do rather than emitting the structured format that VS Code needs to execute it.
+That's a *description* of wanting to use a tool, not an actual tool call. The model talks about what it would do rather than emitting structured JSON.
 
-### Approaches to Bridge the Gap
+Even with models that nominally support tool calling (Llama 3.1, newer Qwen builds), reliability varies wildly. Sometimes you get perfect JSON tool invocations. Sometimes you get malformed JSON with trailing commas. Sometimes the model hallucinates tool names that don't exist. The failure rate is high enough that you can't build a UX that depends on it.
 
-We explored several strategies, each with trade-offs:
+### Our Pragmatic Approach
 
-**Strategy 1: Prompt-Based Tool Calling (Fragile but Simple)**
+Rather than pretending tool calling works, we leaned into what local models are actually good at: **answering questions when you give them the right context upfront.**
 
-Inject tool descriptions into the system prompt and parse the model's output for structured patterns:
+The ContextService, RelevanceRanker, ProjectDetector, and StyleAnalyzer do the "tool work" before the model ever sees your query. They gather relevant files automatically — scoring them by keyword overlap, filename mentions, file type affinity — and inject truncated versions into the system prompt. The model gets a pre-assembled context package and just needs to reason about it.
 
-```typescript
-const toolPrompt = `You have access to these tools. To use a tool, output EXACTLY this format:
-<tool_call>{"name": "readFile", "arguments": {"path": "src/index.ts"}}</tool_call>
+It's less dynamic than real tool calling. You can't say "search the workspace for all files that import Redis" and have the model actually do it. But it's far more reliable than watching a 7B model fail to emit valid JSON 40% of the time.
 
-Available tools:
-- readFile: Read a file's contents. Args: { path: string }
-- searchWorkspace: Search for text across files. Args: { query: string }
-- runCommand: Run a terminal command. Args: { command: string }
-
-IMPORTANT: Output the tool_call tag EXACTLY as shown. Do not describe what you would do — actually call the tool.`;
-```
-
-Then parse the response stream, intercept `<tool_call>` blocks, execute them, and feed results back:
-
-```typescript
-let responseBuffer = '';
-for await (const token of ollamaService.chatStream(messages, model)) {
-    responseBuffer += token;
-
-    const toolCallMatch = responseBuffer.match(
-        /<tool_call>(.*?)<\/tool_call>/s
-    );
-    if (toolCallMatch) {
-        try {
-            const call = JSON.parse(toolCallMatch[1]);
-            const result = await executeToolCall(call.name, call.arguments);
-
-            // Feed the result back to the model as a new message
-            messages.push({ role: 'assistant', content: responseBuffer });
-            messages.push({ role: 'user', content: `Tool result:\n${result}` });
-
-            // Continue the conversation with the tool result
-            responseBuffer = '';
-            for await (const token of ollamaService.chatStream(messages, model)) {
-                response.markdown(token);
-            }
-        } catch (e) {
-            // Model produced malformed tool call — just render it as text
-            response.markdown(responseBuffer);
-        }
-        break;
-    }
-}
-```
-
-**Reality check:** This works maybe 40-60% of the time with 7B models. Common failures:
-- Model outputs natural language instead of the structured format
-- JSON is malformed (missing quotes, trailing commas)
-- Model "hallucinates" tool names that don't exist
-- Model calls tools in a loop, burning through the context window
-
-**Strategy 2: Constrained Decoding via Ollama's Grammar Support**
-
-Ollama supports GBNF grammars that constrain the model's output to valid formats. In theory, you can force the model to output valid tool-call JSON:
-
-```
-POST /api/chat
-{
-    "model": "codellama",
-    "messages": [...],
-    "format": {
-        "type": "object",
-        "properties": {
-            "tool_call": { "type": "string" },
-            "arguments": { "type": "object" }
-        }
-    }
-}
-```
-
-This improves structural reliability — the JSON will be valid — but doesn't solve the semantic problem. The model might output `{"tool_call": "readFile", "arguments": {"path": "the main file"}}` instead of an actual path.
-
-**Strategy 3: Two-Phase Response (Pragmatic Compromise)**
-
-Instead of asking the model to make real-time tool decisions mid-response, split the flow:
-
-1. **Phase 1 — Intent detection:** Ask the model a constrained question: "Does answering this require reading files, searching code, or running commands? Reply with ONLY a JSON array of actions needed, or NONE."
-2. **Phase 2 — Prefetch and answer:** Execute the tools yourself, inject the results as context, then let the model answer with full information.
-
-```typescript
-async function handleWithTools(query: string, model: string) {
-    // Phase 1: Ask what context is needed
-    const intentPrompt = `Given this question: "${query}"
-    What information do you need? Respond with ONLY a JSON array:
-    [{"action": "readFile", "path": "..."}, {"action": "search", "query": "..."}]
-    Or respond with: NONE`;
-
-    const intent = await ollamaService.chatComplete(intentPrompt, model);
-
-    // Phase 2: Gather context
-    let additionalContext = '';
-    if (intent !== 'NONE') {
-        const actions = JSON.parse(intent);
-        for (const action of actions) {
-            if (action.action === 'readFile') {
-                additionalContext += await readWorkspaceFile(action.path);
-            } else if (action.action === 'search') {
-                additionalContext += await searchWorkspace(action.query);
-            }
-        }
-    }
-
-    // Phase 3: Answer with full context
-    const messages = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Context:\n${additionalContext}\n\nQuestion: ${query}` }
-    ];
-    return ollamaService.chatStream(messages, model);
-}
-```
-
-**This is the most reliable approach for small models.** The intent detection query is simple enough that even 7B models get it right most of the time. The trade-off is two round-trips to the model, which doubles latency for tool-using queries.
-
-**Strategy 4: Use Tool-Capable Models (Emerging Option)**
-
-Some newer small models are specifically fine-tuned for tool calling:
-- **Llama 3.1/3.2** have native tool-calling support in their chat template
-- **Mistral** models support function calling
-- **Hermes** and **Functionary** fine-tunes are designed for structured output
-
-If you can require users to pull a tool-capable model, you can use Ollama's native tool support:
-
-```
-POST /api/chat
-{
-    "model": "llama3.1",
-    "messages": [...],
-    "tools": [{
-        "type": "function",
-        "function": {
-            "name": "readFile",
-            "description": "Read a file from the workspace",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "File path relative to workspace root" }
-                },
-                "required": ["path"]
-            }
-        }
-    }]
-}
-```
-
-This is the cleanest solution, but it limits your model choices and the tool-calling reliability still varies significantly between models.
-
-### What This Means for the User Experience
-
-The tool calling gap creates a **visible UX divide** between local and cloud chat:
-
-| Capability | Copilot Chat (Cloud) | Ollama Chat (Local) |
-|---|---|---|
-| Answer questions about code | Yes | Yes |
-| Read files on demand | Seamlessly | Requires prefetch or unreliable |
-| Search across workspace | Built-in | Manual context file selection |
-| Run terminal commands | Yes, with confirmation | Not reliable enough to ship |
-| Apply code edits inline | Yes | Can generate code, risky to auto-apply |
-| Multi-step reasoning with tools | Yes | Context window too small for tool loops |
-
-**Our honest approach:** We leaned into what local models do well (answering with pre-gathered context) and didn't try to fake tool-calling fluency. The context service, relevance ranker, and project detector essentially do the "tool work" upfront — gathering the right context before the model ever sees the query. It's less dynamic than real tool calling, but far more reliable.
-
-The gap here is narrowing fast. As tool-calling fine-tunes improve and Ollama's native tool support matures, this will be the single biggest area of improvement for local coding assistants.
+**The honest assessment:** The tool calling gap is the reason this can't replace Copilot Chat for most workflows. But it's narrowing fast as tool-calling fine-tunes improve. If you're building something like this today, implement the tool calling plumbing (we did) so you're ready when models catch up, but don't make your UX depend on it.
 
 ---
 
-## Pain Point #1: The Streaming Response Problem
+## Pain Point #1: Streaming Responses and the NDJSON Headache
 
-Ollama's `/api/chat` endpoint streams responses as newline-delimited JSON (NDJSON). Each chunk looks like:
+Ollama's `/api/chat` endpoint streams responses as newline-delimited JSON. Each chunk looks like:
 
 ```json
 {"model":"codellama","message":{"role":"assistant","content":"Hello"},"done":false}
 ```
 
-The gotcha: **`fetch` in Node.js doesn't give you `response.body.getReader()` the same way browsers do.** We used an `AsyncGenerator` pattern to yield tokens as they arrive:
+Sounds simple. In practice, you're fighting two problems:
+
+**Buffer boundaries don't align with message boundaries.** A single `read()` from the response body might give you one and a half JSON lines, or half of one. Without proper buffer management, you get random `JSON.parse` failures mid-conversation.
 
 ```typescript
 async *chatStream(messages, model, options) {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-        method: 'POST',
-        body: JSON.stringify({ model, messages, stream: true, options }),
-        signal: this.abortController?.signal
-    });
-
-    const reader = response.body;
+    const reader = response.body.getReader();
     let buffer = '';
-    for await (const chunk of reader) {
-        buffer += chunk.toString();
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        buffer = lines.pop() || '';  // Keep the incomplete line
+
         for (const line of lines) {
-            if (line.trim()) {
-                const parsed = JSON.parse(line);
-                if (parsed.message?.content) {
-                    yield parsed.message.content;
-                }
-            }
+            if (!line.trim() || line.length > 1_000_000) continue;  // Size limit for safety
+            const chunk = JSON.parse(line);
+            if (chunk.message?.content) yield chunk.message.content;
         }
     }
 }
 ```
 
-The buffer management is critical — NDJSON chunks don't always align with message boundaries. Without it, you get random `JSON.parse` failures mid-conversation.
+**Streaming into VS Code's Chat Participant has its own quirks.** `response.markdown()` expects coherent markdown fragments. Ollama streams individual tokens — sometimes mid-word, sometimes mid-code-fence. Push too eagerly and the UI flickers. Push too slowly and it feels laggy. We buffer until a natural boundary (newline, 80+ chars) then flush.
 
 ---
 
-## Pain Point #2: Context Windows Are Tiny
+## Pain Point #2: Context Windows Are Tiny (And It Shows)
 
-This is the elephant in the room. CodeLlama's default context window is 4,096 tokens. DeepSeek-Coder goes up to 16K, but on a resource-constrained laptop you might need to shrink it. Compare that to GPT-4's 128K or Claude's 200K.
+This is the elephant in the room that no amount of clever engineering fully solves.
 
-We implemented a multi-strategy **conversation compactor**:
+CodeLlama's default context window is 4,096 tokens. DeepSeek-Coder goes up to 16K. Compare that to GPT-4's 128K or Claude's 200K. After your system prompt, project context, style guide, and the first few conversation turns, you're out of room.
 
-1. **Code block deduplication** — If the same code block appears in multiple messages, keep only the latest
-2. **Large code block compression** — Replace 20+ line blocks with just their function/class signatures
-3. **Sliding window** — Keep only the last 6 messages when history grows beyond the token budget
-4. **Generative summarization** — Ask the model itself to summarize older conversation into a compact system message
-5. **Extractive summarization** — Fallback: pull key sentences from old messages without using the model
-6. **Message truncation** — Last resort: hard-cut individual messages to fit
+We built a multi-strategy conversation compactor that tries everything:
 
-The token budget calculation is rough (~4 chars per token) but functional. We reserve 70% of the context window for conversation, leaving 30% for the system prompt and context files.
+1. **Code block deduplication** — if the same code appears multiple times in history, keep only the latest
+2. **Large code block compression** — replace 20+ line blocks with their signatures
+3. **Sliding window** — keep only the last 6 messages when history grows
+4. **Extractive summarization** — pull key sentences from older messages
+5. **Message truncation** — last resort hard-cut
 
-**Honest take:** Even with all these strategies, conversations with 4K context models feel choppy after 3-4 exchanges. The model loses track of what you were discussing. 16K models are the practical minimum for a chat-like experience.
+The token budget math: we reserve about 40% of the context window for system prompt + context files, 50% for conversation, 10% for the response. That means with a 4K context model, your conversation gets ~2,000 tokens. That's about 1,500 words — maybe 3-4 exchanges before the model starts losing track of what you were discussing.
+
+**Honest take:** 4K context models feel choppy after 3-4 exchanges. The model forgets constraints, contradicts itself, loses the thread. 16K models are the practical minimum for anything resembling a conversation. If you're trying this, start with a 16K+ context model or accept that you'll be hitting "New Chat" frequently.
 
 ---
 
-## Pain Point #3: Resource-Constrained Laptops
+## Pain Point #3: Your Laptop Is Also Running an OS, a Browser, and VS Code
 
-Running a 7B parameter model requires ~4-8GB of RAM just for the model weights. On a laptop with 8GB total RAM, that leaves almost nothing for VS Code, the OS, and your dev tools.
+Running a 7B model requires ~4-8GB of RAM for model weights alone. On an 8GB laptop, that leaves almost nothing for everything else. Your fans spin up. VS Code stutters. First-token latency is measured in seconds, not milliseconds.
 
-We built a **PerformanceTuner** that profiles the system and adapts:
+We built a `PerformanceTuner` that profiles your system and adjusts model parameters automatically:
 
-| System Tier | RAM | Context Window | Threads | Strategy |
+| System Tier | Available RAM | Context Window | CPU Threads | Strategy |
 |---|---|---|---|---|
-| Low (<6GB) | <6GB | 1024 tokens | 2 | `low_vram: true`, minimal batching |
-| Medium (6-12GB) | 6-12GB | 2048 tokens | 4 | Balanced params |
+| Low (<6GB free) | <6GB | 1024 tokens | 2 | `low_vram: true`, minimal batching |
+| Medium (6-12GB) | 6-12GB | 2048 tokens | 4 | Balanced |
 | High (12GB+) | 12GB+ | 4096 tokens | 6 | Full GPU offload if available |
 
-The tuner also detects GPU availability (CUDA, ROCm, Metal) and adjusts `num_gpu` layers accordingly.
+It detects GPU availability (CUDA, ROCm, Metal) and adjusts `num_gpu` layers accordingly. There's also a "Recommend Models" command that suggests models based on your actual system specs — if you have 4GB free, it'll suggest DeepSeek-Coder 1.3B instead of letting you try to load a 13B model and wonder why everything froze.
 
-**Model recommendations by RAM:**
-
-| RAM | Recommended Models |
-|---|---|
-| 4GB | CodeLlama 7B Q4, DeepSeek-Coder 1.3B |
-| 8GB | CodeLlama 7B, DeepSeek-Coder 6.7B Q4 |
-| 16GB | CodeLlama 13B, DeepSeek-Coder 6.7B |
-| 32GB+ | CodeLlama 34B Q4, DeepSeek-Coder 33B Q4 |
+Honestly, this is table-stakes UX for local model tools that most projects skip. If your extension silently lets users load a model that won't fit in RAM, the experience is terrible and they'll blame your extension, not their hardware.
 
 ---
 
 ## Pain Point #4: Smart Context Without a Cloud Brain
 
-Cloud-based assistants have massive context windows and can ingest entire repos. We don't have that luxury. So we built a **relevance ranker** that scores context files on:
+Cloud assistants can ingest entire repos. We can't. So we built a relevance ranker that tries to score which files are most relevant to your current query.
 
-- **Keyword overlap** with the user's query (weighted by term rarity)
-- **Filename mentions** in the query (e.g., "what does chatService do?" boosts `chatService.ts`)
-- **File type affinity** (TypeScript files score higher for TypeScript questions)
-- **Core file boost** (config files, entry points, type definitions)
-- **Active editor boost** (the file you're looking at is probably relevant)
+The scoring formula considers:
+- **Keyword overlap** — weighted by term rarity (IDF-style)
+- **Filename mentions** — "what does chatService do?" boosts `chatService.ts`
+- **File type affinity** — TypeScript files score higher for TypeScript questions
+- **Core file boost** — config files, entry points, type definitions
+- **Active editor boost** — you're probably asking about what you're looking at
 
-When truncating files to fit the budget, we preserve:
-- Import statements (dependency context)
-- Function/class definitions (structural context)
-- Lines containing query keywords (relevant context)
+When truncating to fit the budget, we keep imports (dependency context), function/class definitions (structural context), and lines containing query keywords (relevant context). The model sees the skeleton plus the parts that matter, not a random slice.
 
-This "smart truncation" means the model sees the skeleton of the file plus the parts that matter, rather than a random 100-line slice.
+Is it as good as Copilot's full-repo indexing? No. Does it help? Noticeably. Without it, you're dumping random file contents at the model and hoping for the best.
 
 ---
 
-## Pain Point #5: The "Just Install the Extension" Problem
+## Pain Point #5: "Just Install the Extension" Is Five Steps
 
-This was a late realization. Unlike cloud-based extensions where you install and go, our extension requires:
+Unlike cloud-based extensions where you install and go, our extension requires:
 
-1. **Install Ollama** (a separate application)
-2. **Start the Ollama server** (`ollama serve`)
-3. **Pull a model** (`ollama pull codellama` — a 3-7GB download)
-4. **Then** use the extension
+1. Install VS Code **Insiders** (because proposed APIs)
+2. Install **Ollama** (a separate application)
+3. Start the Ollama server (`ollama serve`)
+4. Pull a model (`ollama pull qwen2.5-coder:7b` — a multi-GB download)
+5. Install and activate the extension
 
-If any step is missing, the extension silently fails. We solved this with an **onboarding status checklist** in the chat panel:
+If any step is missing, the extension needs to tell you exactly what's wrong. We built an onboarding checklist that shows in the chat panel:
 
 ```
 ┌──────────────────────────────────┐
@@ -519,118 +261,110 @@ If any step is missing, the extension silently fails. We solved this with an **o
 │  ❌ Ollama Running               │
 │     → Start with: ollama serve   │
 │  ⚠️  No models pulled            │
-│     → [Pull codellama]           │
+│     → Run: ollama pull codellama │
 │                                  │
 │  [Open Setup Guide] [Check]      │
 └──────────────────────────────────┘
 ```
 
-The input box starts **disabled** until all checks pass. Error messages are contextual: ECONNREFUSED means "Ollama isn't running", 404 means "model not found — pull it", timeout means "try a smaller model."
+The input box starts **disabled** until all checks pass. Error messages are contextual — ECONNREFUSED means "Ollama isn't running," 404 means "model not found — pull it," timeout means "model might be too large" with a suggestion to try the Recommend Models command.
+
+This was a late realization, and it's the kind of UX work that separates "a project that technically works" from "a project someone else could actually use." Five steps to first chat message is a lot. You have to hand-hold through every one.
 
 ---
 
-## Pain Point #6: Model-Specific Prompting
+## Pain Point #6: Models Are Not Interchangeable
 
-CodeLlama and DeepSeek-Coder respond very differently to the same prompts. CodeLlama prefers structured, verbose system prompts with explicit formatting instructions. DeepSeek-Coder works better with concise, direct prompts.
+CodeLlama and DeepSeek-Coder respond very differently to identical prompts. CodeLlama likes verbose, structured system prompts with explicit formatting instructions. DeepSeek-Coder works better with concise, direct prompts. Send the wrong style and quality degrades noticeably.
 
-We built a **PromptEngine** with 8 task types (explain, refactor, generate, debug, test, review, document, general) and separate template sets per model family. Task detection uses keyword matching on the user's query — crude but effective.
+We built a `PromptEngine` with 8 task types (explain, refactor, generate, debug, test, review, document, general) and separate template sets per model family. Task detection uses keyword matching on the user's query — crude but effective.
 
-**Example difference:**
+The `StyleAnalyzer` also reads your actual source files to detect indentation, naming conventions, quote style, import patterns, and common idioms (async/await usage, React hooks, error handling patterns). This gets baked into the system prompt so the model generates code that matches your style.
 
-CodeLlama system prompt for "explain":
-> "You are an expert code analyst. Provide clear, structured explanations. Use numbered steps. Include relevant concepts..."
-
-DeepSeek-Coder system prompt for "explain":
-> "Explain code concisely. Focus on what it does and why."
+It's a small thing that makes a surprisingly big difference. Nothing breaks trust faster than an AI that confidently writes `snake_case` variables in a `camelCase` codebase.
 
 ---
 
-## Pain Point #7: Project and Style Detection
+## Pain Point #7: The Project Detection Rabbit Hole
 
-For the AI to give contextually appropriate suggestions, it needs to know your stack. Our **ProjectDetector** reads config files to auto-detect:
+For context-aware responses, the model needs to know your stack. Our `ProjectDetector` reads config files to auto-detect language (TypeScript, Python, Go, Rust, Java, Kotlin), framework (React, Next.js, Django, FastAPI, Spring Boot, Gin, etc.), test framework, linter, package manager, and build tool.
 
-- Language (TypeScript, Python, Go, Rust, Java, Kotlin)
-- Framework (React, Next.js, Django, FastAPI, Spring Boot, Gin, etc.)
-- Test framework (Jest, Pytest, Go test, etc.)
-- Linter, package manager, build tool
+This information feeds into the system prompt. When someone asks "write a test for this function," the model knows whether to reach for Jest, Pytest, Go's testing package, or Rust's built-in test framework. Without it, you get generic advice that requires manual adaptation.
 
-The **StyleAnalyzer** reads actual source files to detect:
-- Indentation (tabs vs spaces, width)
-- Naming conventions (camelCase, snake_case, PascalCase)
-- Quote style, semicolons, import patterns
-- Common patterns (async/await, React hooks, error handling idioms)
-
-This gets injected into the system prompt so the model generates code that matches your existing style. It's a small thing that makes a big difference — nothing breaks trust faster than an AI that suggests `snake_case` in a `camelCase` codebase.
+Results are cached for 5 minutes per workspace — expensive file system reads shouldn't happen on every message.
 
 ---
 
-## The Git Journey: Bootstrapping a Repo from Scratch
+## Security: Taking It Seriously for a Local Tool
 
-A meta-pain-point worth mentioning: creating the initial PR when starting from an empty repository.
+You might think "it's all local, what's there to secure?" More than you'd expect.
 
-**Problem:** We had one branch with all the commits but no `main` branch to open a PR against.
+**Webview XSS:** The chat UI renders model-generated markdown as HTML. Markdown that contains `<script>` tags, `javascript:` URIs in links, or malicious code blocks needs to be sanitized. We use DOM APIs for header construction (no `innerHTML` with user-controlled data), event delegation for code block buttons (no inline `onclick` handlers), and block `javascript:`/`data:` URIs in rendered links.
 
-**Attempt 1:** Create `main` from the same commit → PR shows zero diff (same SHA).
+**Content Security Policy:** The webview runs with `default-src 'none'` and nonce-based script/style loading. No external resources can be loaded.
 
-**Attempt 2:** Create orphan `main` with an empty initial commit → PR fails because the branches share no common ancestor.
+**Input validation:** Messages from the webview to the extension backend validate type and length before processing. Model names are restricted to alphanumeric characters, dashes, dots, and colons (no slashes — path traversal is real).
 
-**Solution:** Create orphan `main`, then rebase the feature branch onto it:
+**Server URL restriction:** OllamaService only connects to localhost (`127.0.0.1`, `::1`). No arbitrary server URLs. Credentials in URLs are stripped.
 
-```bash
-git checkout --orphan main
-git rm -rf .
-git commit --allow-empty -m "Initial commit"
-git push -u origin main
+**Streaming protection:** JSON lines from the Ollama API are size-limited to 1MB each to prevent memory exhaustion from a malicious or misconfigured server response.
 
-git checkout feature-branch
-git rebase main --allow-empty
-git push --force-with-lease origin feature-branch
-```
-
-This gives both branches a common root, making the PR diff meaningful. It's a niche problem but one you'll hit if you're bootstrapping repos programmatically.
+Not glamorous work, but skipping it in a tool that renders AI-generated content directly as HTML is asking for trouble.
 
 ---
 
 ## Honest Thoughts on Small Language Models for Coding
 
-After building this entire system to optimize the local coding experience, here's the unvarnished truth:
+After building all of this — ~5,300 lines of code optimizing the local experience — here's the unvarnished truth:
 
-### What works well
+### What actually works well
 
-- **Code explanation** — Small models are genuinely good at explaining what code does. 7B models can break down complex functions accurately.
-- **Boilerplate generation** — Common patterns (React components, Express routes, CRUD operations) come out clean.
-- **Rubber duck debugging** — Even when the model's suggestions aren't perfect, articulating the problem in a chat interface helps you think.
-- **Privacy-sensitive codebases** — If you're working on proprietary code that can't leave your machine, local models are the only option.
-- **Offline development** — Planes, trains, coffee shops with bad WiFi. Your coding assistant still works.
+- **Code explanation** — Small models are genuinely good at this. 7B models can break down complex functions accurately and clearly.
+- **Boilerplate generation** — React components, Express routes, CRUD operations, common patterns. These come out clean.
+- **Focused code questions** — "What does this regex do?" "How does this async flow work?" With the right context injected, answers are solid.
+- **Rubber duck debugging** — Even when suggestions aren't perfect, the act of articulating a problem in a chat interface helps you think. The AI's response is a bonus.
+- **Privacy-sensitive work** — Proprietary code that can't leave your machine. This is the #1 legitimate use case.
+- **Offline development** — Planes, trains, rural areas. Your coding assistant keeps working.
 
 ### What doesn't work well
 
-- **Complex reasoning across files** — With 4K-16K context windows, the model simply can't hold enough of your codebase in memory to understand cross-file interactions.
-- **Architectural suggestions** — "How should I restructure this service?" requires understanding the entire system. Small models give generic advice.
-- **Novel problem solving** — For problems that require genuine reasoning rather than pattern matching, the gap between 7B and 70B+ models is enormous.
-- **Long conversations** — Even with compaction strategies, conversations degrade noticeably after the context window fills up. The model starts contradicting itself or forgetting constraints.
-- **Accuracy on edge cases** — Type gymnastics in TypeScript, complex SQL queries, async race conditions — small models hallucinate more in these areas.
+- **Cross-file reasoning** — With 4K-16K context, the model just can't hold enough of your codebase to understand how services interact across files. It gives answers about individual files, not systems.
+- **Architectural advice** — "How should I restructure this?" requires understanding the whole picture. Small models give generic advice because they can only see a fragment of it.
+- **Long conversations** — Even with compaction, conversations degrade noticeably after the context fills. The model starts contradicting itself.
+- **Complex edge cases** — Advanced TypeScript generics, complex SQL, async race conditions — small models hallucinate more here.
+- **Anything requiring tool calling** — As discussed. The plumbing exists, the model reliability doesn't (yet).
 
-### The sweet spot
+### Who this is actually for
 
-**7B-13B models on 16GB+ RAM** is currently the practical sweet spot for local coding assistance. Below that, you're fighting context limits and resource constraints too much. Above that (33B+), you need serious hardware.
+Let me be direct: **most developers should just use Copilot or Claude Code.** They're better at virtually everything. The models are orders of magnitude more capable. The UX is polished. They have proper tool calling, massive context windows, and professional support.
 
-The ideal workflow isn't "replace Copilot/Claude with a local model." It's:
-1. **Use local models** for routine tasks, explanations, and boilerplate — where privacy matters or you're offline
-2. **Use cloud models** for complex reasoning, large-context analysis, and architectural decisions — where quality matters most
+This project makes sense if:
+- You work offline regularly and still want AI assistance
+- You're in an environment where code cannot leave your machine (security clearance, regulated industries, paranoia)
+- You want to understand how AI coding tools work by building one yourself
+- You're experimenting with fine-tuned local models for a specific domain
 
-Think of local models as a fast, private first line of assistance, with cloud models as the escalation path.
+That's a real audience, but it's a niche one, and it's important to say that clearly rather than pretending a 7B model running on your laptop is competitive with what Anthropic and OpenAI are deploying in data centers.
 
-### Looking ahead
+### The sweet spot (if you're going to try it)
 
-The model landscape is moving fast. A few trends that matter for local coding:
+**7B-13B models on 16GB+ RAM** with a 16K+ context window is the practical floor. Below that, you're fighting the model too much. Our Qwen-Coder custom Modelfile (tweaked temperature, top_k, system prompt) gets decent results for common tasks, and the new Qwen 2.5 Coder builds are noticeably better than what was available a year ago.
 
-- **Quantization improvements** (GGUF, GPTQ) are making larger models fit in less RAM with minimal quality loss
-- **Speculative decoding** and other inference optimizations are improving speed on consumer hardware
-- **Context window expansion** — newer small models are shipping with 32K-128K context natively
-- **Code-specific fine-tuning** keeps improving; coding benchmarks for small models today beat large models from 18 months ago
+The ideal workflow isn't "replace cloud tools" — it's:
+1. **Use local models** for routine tasks, explanations, and boilerplate where privacy matters or you're offline
+2. **Use cloud models** for complex reasoning, multi-file analysis, and anything that requires a large context window
 
-The gap is closing, but it's still significant. Build your tools to be model-agnostic and context-efficient — today's constraints inform tomorrow's architecture even when hardware catches up.
+Local models are a fast, private fallback. Not the primary tool.
+
+### The gap is closing (but it's still big)
+
+A few trends that give me optimism:
+- **Quantization improvements** (GGUF, GPTQ) are fitting bigger models in less RAM
+- **Context windows are expanding** — newer small models ship with 32K-128K natively
+- **Tool-calling fine-tunes** are getting better (Llama 3.1/3.2, Qwen 2.5)
+- **Code-specific models** keep improving; today's small model benchmarks beat large models from 18 months ago
+
+But "the gap is closing" is not "the gap is closed." Build your tooling to be model-agnostic and context-efficient. Today's constraints won't last forever, but the architecture patterns you develop around them will stay useful.
 
 ---
 
@@ -639,26 +373,28 @@ The gap is closing, but it's still significant. Build your tools to be model-agn
 | Component | Technology |
 |---|---|
 | Extension Host | VS Code Extension API (TypeScript) |
-| Chat Integration | VS Code Chat Participant API (`@ollama` mention) |
-| Fallback UI | Webview (HTML/CSS/JS) with VS Code theme variables |
+| Chat Integration | VS Code Chat Participant API + custom Webview fallback |
+| Model Integration | `LanguageModelChatProvider` (proposed API, requires VS Code Insiders) |
 | LLM Backend | Ollama REST API (`/api/chat`, `/api/tags`) |
-| Streaming | AsyncGenerator with NDJSON parsing |
+| Streaming | AsyncGenerator with NDJSON buffered parsing |
 | Bundling | Webpack |
-| Models | CodeLlama 7B/13B/34B, DeepSeek-Coder 1.3B/6.7B/33B |
-| Security | CSP with nonce-based scripts, no external requests |
+| Primary Models | Qwen 2.5 Coder 7B, custom Qwen-Coder Modelfile |
+| Other Tested Models | CodeLlama 7B/13B, DeepSeek-Coder 1.3B/6.7B |
+| Security | CSP with nonce-based scripts, localhost-only connections, input validation |
 
 ---
 
 ## Key Takeaways
 
-1. **Use VS Code's Chat Participant API** — don't build a custom webview chat UI. The native chat panel gives you rendering, code actions, variable resolution, and conversation management for free. The integration work is harder, but the result is dramatically better.
-2. **Tool calling is the biggest gap** between local and cloud assistants. Don't fake it — prefetch context reliably rather than shipping unreliable real-time tool calls. The two-phase approach (intent detection → prefetch → answer) is the pragmatic sweet spot for small models.
-3. **Context window management is the #1 technical challenge** — invest heavily in compaction and relevance ranking
-4. **Adaptive performance tuning is essential** — detect the user's hardware and configure accordingly
-5. **Model-specific prompting matters more than you'd think** — same prompt, different model, very different results
-6. **Onboarding UX can make or break adoption** — users expect "install and go," local models require "install, configure, download, run, then go"
-7. **Small models are tools, not replacements** — know their strengths and design your UX around realistic expectations. The sweet spot is routine tasks, code explanation, and offline/private work.
+1. **Be honest about the limitations.** This is not the best way for most people to get AI coding assistance. Cloud tools are better. But for offline/private use cases, local models are the *only* option, and that's worth building for.
+2. **VS Code's proposed API situation is a real barrier.** The `chatProvider` API makes the experience dramatically better, but it locks you into Insiders-only distribution. Ship a webview fallback if you want anyone to actually use your extension.
+3. **Tool calling is the biggest capability gap** between local and cloud. Don't fake it — prefetch context reliably. The plumbing for real tool calling should be there for when models improve, but don't build UX that depends on it today.
+4. **Context window management is the #1 technical challenge.** Invest heavily in compaction and relevance ranking. It's the difference between a useful assistant and one that forgets what you said two messages ago.
+5. **Adaptive performance tuning is essential.** Detect hardware, recommend appropriate models, gate the experience. Letting users load a 13B model on 8GB RAM without warning is a guaranteed bad first impression.
+6. **Model-specific prompting matters more than you'd think.** Same prompt, different model, very different results. Invest in per-model template tuning.
+7. **Onboarding UX is the make-or-break.** Five steps to first message is a lot. Hand-hold through every one, and make errors actionable — not just "connection failed" but "Ollama isn't running, here's how to start it."
+8. **Build it anyway.** Even if the output is worse than cloud tools, you'll learn more about how AI coding assistants work by building one from scratch than you will from any blog post or tutorial — including this one.
 
 ---
 
-*The full source code is available at [github.com/jmcdonald69124/ollama-vscode-local](https://github.com/jmcdonald69124/ollama-vscode-local).*
+*The full source code is at [github.com/jmcdonald69124/ollama-vscode-local](https://github.com/jmcdonald69124/ollama-vscode-local). PRs welcome, especially if you figure out how to make tool calling reliable on 7B models.*
