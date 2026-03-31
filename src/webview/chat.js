@@ -24,6 +24,7 @@
   let currentAssistantEl = null;
   let currentAssistantContent = '';
   let contextDrawerOpen = false;
+  let renderPending = false;
 
   // Request initial state
   vscode.postMessage({ type: 'requestState' });
@@ -133,9 +134,17 @@
   function handleStreamChunk(content) {
     if (!currentAssistantEl) return;
     currentAssistantContent += content;
-    const contentEl = currentAssistantEl.querySelector('.message-content');
-    contentEl.innerHTML = renderMarkdown(currentAssistantContent);
-    scrollToBottom();
+    if (!renderPending) {
+      renderPending = true;
+      requestAnimationFrame(() => {
+        renderPending = false;
+        if (currentAssistantEl) {
+          const contentEl = currentAssistantEl.querySelector('.message-content');
+          contentEl.innerHTML = renderWithThinking(currentAssistantContent, true);
+          scrollToBottom();
+        }
+      });
+    }
   }
 
   function handleStreamEnd() {
@@ -147,7 +156,7 @@
 
     if (currentAssistantEl && currentAssistantContent) {
       const contentEl = currentAssistantEl.querySelector('.message-content');
-      contentEl.innerHTML = renderMarkdown(currentAssistantContent);
+      contentEl.innerHTML = renderWithThinking(currentAssistantContent, false);
     } else if (currentAssistantEl && !currentAssistantContent) {
       currentAssistantEl.remove();
     }
@@ -202,6 +211,9 @@
     if (role !== 'assistant') {
       const contentEl = messageEl.querySelector('.message-content');
       contentEl.innerHTML = renderMarkdown(content);
+    } else if (content) {
+      const contentEl = messageEl.querySelector('.message-content');
+      contentEl.innerHTML = renderWithThinking(content, false);
     }
 
     messagesContainer.appendChild(messageEl);
@@ -282,6 +294,65 @@
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // --- Thinking block support ---
+  // Parses <think>...</think> from model output (Qwen3 style).
+  // Returns { thinking, isThinking, content }:
+  //   thinking    — the thinking text (or null if no <think> found)
+  //   isThinking  — true if the </think> closing tag hasn't arrived yet
+  //   content     — everything after </think>
+  function parseThinking(text) {
+    const start = text.indexOf('<think>');
+    if (start === -1) {
+      return { thinking: null, isThinking: false, content: text };
+    }
+    const end = text.indexOf('</think>', start);
+    if (end === -1) {
+      // Still inside the thinking block
+      return { thinking: text.slice(start + 7), isThinking: true, content: '' };
+    }
+    return {
+      thinking: text.slice(start + 7, end),
+      isThinking: false,
+      content: text.slice(end + 8).replace(/^\n+/, ''),
+    };
+  }
+
+  // Renders content that may include a <think> block.
+  // streaming=true means the model is still generating (block stays open).
+  function renderWithThinking(text, streaming) {
+    const { thinking, isThinking, content } = parseThinking(text);
+
+    if (thinking === null) {
+      return renderMarkdown(text);
+    }
+
+    let html = '';
+    if (isThinking || streaming) {
+      // Open block — model is still thinking
+      html += `<div class="thinking-block thinking-active">
+        <div class="thinking-header">
+          <span class="thinking-spinner"></span>
+          <span>Thinking…</span>
+        </div>
+        <div class="thinking-content">${renderMarkdown(thinking)}</div>
+      </div>`;
+    } else {
+      // Done — collapse to a <details> element, closed by default
+      html += `<details class="thinking-block">
+        <summary class="thinking-header">
+          <span class="thinking-icon">&#x1F4AD;</span>
+          <span>Thought</span>
+        </summary>
+        <div class="thinking-content">${renderMarkdown(thinking)}</div>
+      </details>`;
+    }
+
+    if (content) {
+      html += renderMarkdown(content);
+    }
+    return html;
   }
 
   // --- Minimal markdown renderer ---

@@ -18,7 +18,7 @@ export interface ProjectInfo {
 export class ProjectDetector {
   private cachedInfo: ProjectInfo | null = null;
   private cacheTime = 0;
-  private readonly CACHE_TTL = 30000; // 30 seconds
+  private readonly CACHE_TTL = 300000; // 5 minutes
 
   async detect(): Promise<ProjectInfo | null> {
     if (this.cachedInfo && Date.now() - this.cacheTime < this.CACHE_TTL) {
@@ -45,23 +45,15 @@ export class ProjectDetector {
       projectType: 'unknown',
     };
 
-    // Run detections in parallel
-    const [
-      nodeResult,
-      pythonResult,
-      goResult,
-      rustResult,
-      javaResult,
-    ] = await Promise.allSettled([
+    // Run all detections in parallel, including linter
+    await Promise.allSettled([
       this.detectNode(rootUri, info),
       this.detectPython(rootUri, info),
       this.detectGo(rootUri, info),
       this.detectRust(rootUri, info),
       this.detectJava(rootUri, info),
+      this.detectLinter(rootUri, info),
     ]);
-
-    // Detect linter config
-    await this.detectLinter(rootUri, info);
 
     this.cachedInfo = info;
     this.cacheTime = Date.now();

@@ -17,7 +17,7 @@ export function registerChatParticipant(
     token
   ): Promise<vscode.ChatResult> => {
     const config = vscode.workspace.getConfiguration('ollamaChat');
-    const model = config.get<SupportedModel>('defaultModel', 'codellama');
+    const model = config.get<SupportedModel>('defaultModel', 'qwen3-coder');
     const systemPrompt = config.get<string>(
       'systemPrompt',
       'You are a helpful coding assistant. Provide clear, concise, and correct code. When showing code, always specify the language in markdown code blocks.'
@@ -62,7 +62,9 @@ export function registerChatParticipant(
 
     try {
       for await (const chunk of ollamaService.chatStream(messages, model)) {
-        stream.markdown(chunk);
+        if (typeof chunk === 'string') {
+          stream.markdown(chunk);
+        }
       }
 
       return {

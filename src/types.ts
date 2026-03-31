@@ -14,10 +14,22 @@ export interface OllamaChatRequest {
   };
 }
 
+export interface OllamaToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
 export interface OllamaChatResponseChunk {
   model: string;
   created_at: string;
-  message: { role: string; content: string };
+  message: {
+    role: string;
+    content: string;
+    tool_calls?: Array<{
+      function: { name: string; arguments: Record<string, unknown> };
+    }>;
+  };
   done: boolean;
   total_duration?: number;
   eval_count?: number;
@@ -47,7 +59,8 @@ export interface ContextFile {
   language: string;
 }
 
-export type SupportedModel = 'codellama' | 'deepseek-coder';
+// Allows selecting built-in models plus any installed Ollama model tag/name.
+export type SupportedModel = string;
 
 export type ExtensionToWebviewMessage =
   | { type: 'streamChunk'; content: string }

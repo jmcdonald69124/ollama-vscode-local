@@ -10,9 +10,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true
+    "resolveJsonModule": true
   },
   "exclude": ["node_modules", "dist", "src/webview"]
 }

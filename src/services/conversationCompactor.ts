@@ -136,18 +136,7 @@ export class ConversationCompactor {
       return this.truncateMessages(recent, tokenBudget);
     }
 
-    // Try to summarize older messages using the model
-    const summary = await this.generateSummary(older, summaryBudget, model);
-
-    if (summary) {
-      const summaryMessage: OllamaChatMessage = {
-        role: 'assistant',
-        content: `[Previous conversation summary]\n${summary}`,
-      };
-      return [summaryMessage, ...recent];
-    }
-
-    // Fallback: extractive summary (no model call)
+    // Use fast extractive summary (no model call — avoids recursive LLM latency)
     const extractiveSummary = this.extractiveSummary(older, summaryBudget);
     if (extractiveSummary) {
       const summaryMessage: OllamaChatMessage = {

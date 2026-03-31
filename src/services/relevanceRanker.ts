@@ -14,6 +14,24 @@ interface ScoredFile {
  * to prioritize the most useful files within the token budget.
  */
 export class RelevanceRanker {
+  private contentCache = new Map<string, { content: string; timestamp: number }>();
+  private readonly CONTENT_CACHE_TTL = 60000; // 60 seconds
+
+  private async getFileContent(uri: string): Promise<string | null> {
+    const cached = this.contentCache.get(uri);
+    if (cached && Date.now() - cached.timestamp < this.CONTENT_CACHE_TTL) {
+      return cached.content;
+    }
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+      const content = doc.getText();
+      this.contentCache.set(uri, { content, timestamp: Date.now() });
+      return content;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Rank and select the most relevant files for a given query,
    * fitting within the approximate token budget.
@@ -27,17 +45,14 @@ export class RelevanceRanker {
 
     const scored: ScoredFile[] = [];
 
-    for (const file of files) {
-      try {
-        const doc = await vscode.workspace.openTextDocument(
-          vscode.Uri.parse(file.uri)
-        );
-        const content = doc.getText();
-        const score = this.scoreFile(file, content, query);
-        scored.push({ file, score, content });
-      } catch {
-        // File may have been deleted
-      }
+    const fileContents = await Promise.all(
+      files.map(file => this.getFileContent(file.uri))
+    );
+    for (let i = 0; i < files.length; i++) {
+      const content = fileContents[i];
+      if (content === null) { continue; }
+      const score = this.scoreFile(files[i], content, query);
+      scored.push({ file: files[i], score, content });
     }
 
     // Sort by score descending

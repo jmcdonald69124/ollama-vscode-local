@@ -22,7 +22,7 @@ export interface CodingStyle {
 export class StyleAnalyzer {
   private cachedStyle: CodingStyle | null = null;
   private cacheTime = 0;
-  private readonly CACHE_TTL = 60000; // 1 minute
+  private readonly CACHE_TTL = 300000; // 5 minutes
 
   async analyze(contextFileUris: string[]): Promise<CodingStyle> {
     if (this.cachedStyle && Date.now() - this.cacheTime < this.CACHE_TTL) {

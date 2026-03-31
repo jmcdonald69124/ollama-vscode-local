@@ -4,6 +4,7 @@ import {
   OllamaChatResponseChunk,
   OllamaModelInfo,
   OllamaTagsResponse,
+  OllamaToolCall,
 } from '../types';
 
 const SAFE_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
@@ -80,8 +81,12 @@ export class OllamaService {
       num_batch?: number;
       low_vram?: boolean;
       keep_alive?: string;
-    }
-  ): AsyncGenerator<string, void, unknown> {
+    },
+    tools?: Array<{
+      type: 'function';
+      function: { name: string; description: string; parameters: object };
+    }>
+  ): AsyncGenerator<string | OllamaToolCall, void, unknown> {
     this.abortController = new AbortController();
     const config = vscode.workspace.getConfiguration('ollamaChat');
 
@@ -89,25 +94,31 @@ export class OllamaService {
       temperature:
         options?.temperature ?? config.get<number>('temperature', 0.7),
       num_ctx:
-        options?.num_ctx ?? config.get<number>('contextWindowSize', 4096),
+        options?.num_ctx ?? config.get<number>('contextWindowSize', 16384),
+      num_batch:
+        options?.num_batch ?? config.get<number>('numBatch', 512),
     };
 
-    // Performance tuning params (only set if provided)
+    // Performance tuning params (only set if provided or configured)
+    const numGpuOpt = options?.num_gpu ?? config.get<number>('numGpu', -1);
+    if (numGpuOpt !== -1) { ollamaOptions.num_gpu = numGpuOpt; }
     if (options?.num_thread) { ollamaOptions.num_thread = options.num_thread; }
-    if (options?.num_gpu !== undefined) { ollamaOptions.num_gpu = options.num_gpu; }
-    if (options?.num_batch) { ollamaOptions.num_batch = options.num_batch; }
     if (options?.low_vram) { ollamaOptions.low_vram = options.low_vram; }
+
+    const keepAlive =
+      options?.keep_alive ?? config.get<string>('keepAlive', '30m');
 
     const body: Record<string, unknown> = {
       model,
       messages,
       stream: true,
       options: ollamaOptions,
+      keep_alive: keepAlive,
     };
 
-    // keep_alive controls how long the model stays loaded in memory
-    if (options?.keep_alive) {
-      body.keep_alive = options.keep_alive;
+    // Pass tool definitions to Ollama if provided
+    if (tools && tools.length > 0) {
+      body.tools = tools;
     }
 
     const response = await fetch(`${this.baseUrl}/api/chat`, {
@@ -127,6 +138,7 @@ export class OllamaService {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let toolCallCounter = 0;
 
     try {
       while (true) {
@@ -144,6 +156,15 @@ export class OllamaService {
           }
           try {
             const chunk: OllamaChatResponseChunk = JSON.parse(line);
+            if (chunk.message?.tool_calls) {
+              for (const tc of chunk.message.tool_calls) {
+                yield {
+                  id: `call_${toolCallCounter++}`,
+                  name: tc.function.name,
+                  arguments: tc.function.arguments,
+                } satisfies OllamaToolCall;
+              }
+            }
             if (chunk.message?.content) {
               yield chunk.message.content;
             }
@@ -157,6 +178,15 @@ export class OllamaService {
       if (buffer.trim()) {
         try {
           const chunk: OllamaChatResponseChunk = JSON.parse(buffer);
+          if (chunk.message?.tool_calls) {
+            for (const tc of chunk.message.tool_calls) {
+              yield {
+                id: `call_${toolCallCounter++}`,
+                name: tc.function.name,
+                arguments: tc.function.arguments,
+              } satisfies OllamaToolCall;
+            }
+          }
           if (chunk.message?.content) {
             yield chunk.message.content;
           }

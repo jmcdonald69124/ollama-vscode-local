@@ -13,8 +13,11 @@
     "url": "https://github.com/jmcdonald69124/ollama-vscode-local/issues"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.100.0"
   },
+  "enabledApiProposals": [
+    "chatProvider"
+  ],
   "categories": [
     "AI",
     "Chat",
@@ -218,34 +221,27 @@
         },
         "ollamaChat.defaultModel": {
           "type": "string",
-          "default": "codellama",
-          "enum": [
-            "codellama",
-            "deepseek-coder"
-          ],
-          "enumDescriptions": [
-            "CodeLlama - Broad language support, strong general coding, extensive documentation",
-            "DeepSeek-Coder - Top benchmark performance, excellent code generation, strong with Chinese programming contexts"
-          ],
-          "description": "Default model for chat"
+          "default": "qwen-coder",
+          "description": "Default model for chat. Use any model name installed in Ollama (run 'ollama list' to see available models)."
         },
         "ollamaChat.temperature": {
           "type": "number",
-          "default": 0.7,
+          "default": 0.3,
           "minimum": 0,
           "maximum": 2,
-          "description": "Temperature for generation (0 = deterministic, higher = more creative)"
+          "description": "Temperature for generation. Lower values (0.1-0.3) are better for tool calling and code. Higher values (0.7+) for creative tasks."
         },
         "ollamaChat.contextWindowSize": {
           "type": "number",
-          "default": 4096,
+          "default": 16384,
           "enum": [
             2048,
             4096,
             8192,
-            16384
+            16384,
+            32768
           ],
-          "description": "Context window size (num_ctx). Larger values use more memory."
+          "description": "Context window size (num_ctx). Larger values use more memory but allow multi-file agent conversations."
         },
         "ollamaChat.maxContextFiles": {
           "type": "number",
@@ -261,6 +257,23 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically include the active editor file as context"
+        },
+        "ollamaChat.keepAlive": {
+          "type": "string",
+          "default": "30m",
+          "description": "How long to keep the model loaded in memory after the last request (e.g. '5m', '30m', '1h', '-1' for always). Longer values eliminate the model-reload delay on each request."
+        },
+        "ollamaChat.numBatch": {
+          "type": "number",
+          "default": 512,
+          "enum": [128, 256, 512, 1024, 2048],
+          "description": "Prompt processing batch size (num_batch). Larger values speed up prompt ingestion but use more VRAM. 512 is a safe default; increase to 1024–2048 if you have spare GPU memory."
+        },
+        "ollamaChat.numGpu": {
+          "type": "number",
+          "default": -1,
+          "minimum": -1,
+          "description": "Number of model layers to offload to GPU (-1 = auto, 0 = CPU-only). Set to a specific number to limit GPU memory usage."
         }
       }
     },

@@ -12,7 +12,7 @@ export function registerModelCommands(
     vscode.commands.registerCommand('ollamaChat.selectModel', async () => {
       const currentModel = chatProvider.getModel();
 
-      const items = SUPPORTED_MODELS.map((m) => ({
+      const curatedItems = SUPPORTED_MODELS.map((m) => ({
         label: m.label,
         description:
           m.id === currentModel ? '(current)' : m.description,
@@ -20,25 +20,48 @@ export function registerModelCommands(
         modelId: m.id,
       }));
 
+      const installedItems: Array<{
+        label: string;
+        description: string;
+        detail: string;
+        modelId: string;
+      }> = [];
+
+      try {
+        const installedModels = await ollamaService.listModels();
+        const curatedIds = new Set(SUPPORTED_MODELS.map((m) => m.id));
+
+        for (const model of installedModels) {
+          if (curatedIds.has(model.name)) {
+            continue;
+          }
+          installedItems.push({
+            label: model.name,
+            description:
+              model.name === currentModel ? '(current)' : 'Installed in Ollama',
+            detail: 'Detected from local Ollama instance',
+            modelId: model.name,
+          });
+        }
+      } catch {
+        // If Ollama is unreachable, still show curated model choices.
+      }
+
+      const items = [...curatedItems, ...installedItems];
+
       const selected = await vscode.window.showQuickPick(items, {
         title: 'Select AI Model',
         placeHolder: 'Choose a model for chat',
       });
 
       if (selected) {
-        // Guard: ensure the picked modelId is a known supported model
-        const validModel = SUPPORTED_MODELS.find(m => m.id === selected.modelId);
-        if (!validModel) {
-          return;
-        }
-
-        chatProvider.setModel(validModel.id);
+        chatProvider.setModel(selected.modelId);
 
         // Update default in settings
         const config = vscode.workspace.getConfiguration('ollamaChat');
         await config.update(
           'defaultModel',
-          validModel.id,
+          selected.modelId,
           vscode.ConfigurationTarget.Global
         );
 
@@ -46,18 +69,18 @@ export function registerModelCommands(
         try {
           const models = await ollamaService.listModels();
           const installed = models.some((m) =>
-            m.name.startsWith(validModel.id)
+            m.name.startsWith(selected.modelId)
           );
           if (!installed) {
             const pull = await vscode.window.showWarningMessage(
-              `Model "${validModel.id}" is not installed. Would you like to pull it?`,
+              `Model "${selected.modelId}" is not installed. Would you like to pull it?`,
               'Pull Model',
               'Cancel'
             );
             if (pull === 'Pull Model') {
               vscode.commands.executeCommand(
                 'ollamaChat.pullModel',
-                validModel.id
+                selected.modelId
               );
             }
           }

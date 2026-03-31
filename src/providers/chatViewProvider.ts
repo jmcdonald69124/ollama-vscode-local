@@ -64,7 +64,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const config = vscode.workspace.getConfiguration('ollamaChat');
     this.currentModel = config.get<SupportedModel>(
       'defaultModel',
-      'codellama'
+      'qwen-coder'
     );
     this.currentSession = this.createNewSession();
   }
@@ -141,6 +141,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.contextService.onDidChange((files) => {
       this.postMessage({ type: 'contextFilesUpdated', files });
     });
+
+    // Warm expensive caches in the background so the first message
+    // doesn't block on project detection, style analysis, and system profiling.
+    Promise.all([
+      this.performanceTuner.profileSystem(),
+      this.projectDetector.detect(),
+      this.styleAnalyzer.analyze(this.contextService.getFiles().map(f => f.uri)),
+    ]).catch(() => { /* non-critical, ignore failures */ });
   }
 
   private async handleUserMessage(text: string): Promise<void> {
@@ -152,13 +160,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const config = vscode.workspace.getConfiguration('ollamaChat');
 
-    // 1. Get optimal performance params for this system
-    const systemProfile = await this.performanceTuner.profileSystem();
+    // 1. Run system profiling, project detection, and style analysis all in parallel
+    const [systemProfile, projectInfo, codingStyle] = await Promise.all([
+      this.performanceTuner.profileSystem(),
+      this.projectDetector.detect(),
+      this.styleAnalyzer.analyze(
+        this.contextService.getFiles().map(f => f.uri)
+      ),
+    ]);
+
     const perfParams = this.performanceTuner.getOptimalParams(systemProfile);
 
-    // Use adaptive context window: override user setting if system is constrained
-    const configuredCtx = config.get<number>('contextWindowSize', 4096);
-    const contextWindowSize = Math.min(configuredCtx, perfParams.num_ctx);
+    // Always use the user-configured context window. The performance tuner
+    // only informs GPU/thread/batch settings — letting it cap num_ctx causes
+    // the compactor to trigger after just a few exchanges.
+    const contextWindowSize = config.get<number>('contextWindowSize', 16384);
 
     // 2. Check response cache (skip LLM call if we have a cached answer)
     const contextHash = this.responseCache.hashContext(
@@ -177,18 +193,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // 3. Auto-detect project info and coding style in parallel
-    const [projectInfo, codingStyle] = await Promise.all([
-      this.projectDetector.detect(),
-      this.styleAnalyzer.analyze(
-        this.contextService.getFiles().map(f => f.uri)
-      ),
-    ]);
-
-    // 4. Detect task type from query
+    // 3. Detect task type and rank context files in parallel
     const taskType = this.promptEngine.detectTaskType(text);
 
-    // 5. Rank and select relevant context files within token budget
     // Reserve ~35% of context window for system prompt + context
     const contextTokenBudget = Math.floor(contextWindowSize * 0.35);
     const rankedContext = await this.relevanceRanker.rankAndSelect(
@@ -197,7 +204,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       contextTokenBudget
     );
 
-    // 6. Build model-specific system prompt
+    // 4. Build model-specific system prompt
     const systemPrompt = this.promptEngine.buildSystemPrompt({
       model: this.currentModel,
       task: taskType,
@@ -207,7 +214,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       userQuery: text,
     });
 
-    // 7. Compact conversation history to fit remaining budget
+    // 5. Compact conversation history to fit remaining budget
     const compactedHistory = await this.compactor.compact(
       this.currentSession.messages,
       systemPrompt,
@@ -215,7 +222,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.currentModel
     );
 
-    // 8. Assemble final messages
+    // 6. Assemble final messages
     const systemMessage: OllamaChatMessage = {
       role: 'system',
       content: systemPrompt,
@@ -236,8 +243,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           keep_alive: perfParams.keep_alive,
         }
       )) {
-        fullResponse += chunk;
-        this.postMessage({ type: 'streamChunk', content: chunk });
+        if (typeof chunk === 'string') {
+          fullResponse += chunk;
+          this.postMessage({ type: 'streamChunk', content: chunk });
+        }
       }
       this.postMessage({ type: 'streamEnd' });
       this.currentSession.messages.push({
@@ -353,7 +362,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <div id="toolbar">
             <div id="model-info">
                 <span id="connection-status" class="status-dot disconnected" title="Checking connection..."></span>
-                <span id="model-name" class="toolbar-btn" title="Click to change model">codellama</span>
+                <span id="model-name" class="toolbar-btn" title="Click to change model">qwen-coder</span>
             </div>
             <div id="toolbar-actions">
                 <button id="context-btn" class="toolbar-btn" title="Add context files">
@@ -386,7 +395,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     <ul>
                         <li>Right-click code in the editor to ask about it</li>
                         <li>Add context files for codebase-aware responses</li>
-                        <li>Use the model selector to switch between CodeLlama and DeepSeek-Coder</li>
+                        <li>Use the model selector to switch between available Ollama models</li>
                     </ul>
                 </div>
             </div>

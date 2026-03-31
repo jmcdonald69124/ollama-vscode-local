@@ -10,18 +10,18 @@ export interface ModelDefinition {
 
 export const SUPPORTED_MODELS: ModelDefinition[] = [
   {
-    id: 'codellama',
-    label: 'CodeLlama',
-    description: 'Broad language support, extensive documentation',
-    detail: 'Meta\'s CodeLlama is ideal for general-purpose coding across many languages. Best choice if you need broad language support, cloud accessibility, and extensive documentation.',
-    ollamaTag: 'codellama',
+    id: 'qwen-coder',
+    label: 'Qwen Coder (tuned)',
+    description: 'Tuned for precision, speed, and Claude-like responses (recommended)',
+    detail: 'qwen2.5-coder:7b with custom sampling (temp 0.15, top_k 40) and a Claude-style system prompt baked in. Low temperature for accurate code, direct responses, no filler.',
+    ollamaTag: 'qwen-coder',
   },
   {
-    id: 'deepseek-coder',
-    label: 'DeepSeek-Coder',
-    description: 'Top benchmark performance, excellent code generation',
-    detail: 'DeepSeek-Coder excels on coding benchmarks with top performance. Best choice if you need maximum code generation quality, especially with Chinese programming contexts.',
-    ollamaTag: 'deepseek-coder',
+    id: 'qwen2.5-coder:7b',
+    label: 'Qwen2.5 Coder 7B',
+    description: 'Base model — use if you want default settings',
+    detail: 'Qwen2.5-Coder 7B base without custom tuning.',
+    ollamaTag: 'qwen2.5-coder:7b',
   },
 ];
 

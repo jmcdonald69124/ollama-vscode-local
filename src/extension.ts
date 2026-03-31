@@ -131,7 +131,7 @@ async function updateStatusBar(
   ollamaService: OllamaService
 ) {
   const config = vscode.workspace.getConfiguration('ollamaChat');
-  const model = config.get<string>('defaultModel', 'codellama');
+  const model = config.get<string>('defaultModel', 'qwen3-coder');
   const connected = await ollamaService.isConnected();
 
   const icon = connected ? '$(check)' : '$(warning)';
